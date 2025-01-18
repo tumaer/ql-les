@@ -12,14 +12,18 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
+# passing checkpoint path is necessary for evaluation
+ckpt_path: path/to/checkpoint.ckpt
+
 tags: ["mnist", "simple_dense_net"]
 
 seed: 12345
 
 trainer:
-  min_epochs: 10
-  max_epochs: 10
+  min_epochs: 3
+  max_epochs: 3
   gradient_clip_val: 0.5
+  accelerator: "gpu"
 
 model:
   optimizer:
@@ -39,3 +43,5 @@ logger:
     group: "mnist"
   aim:
     experiment: "mnist"
+
+

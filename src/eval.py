@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Tuple
 
 import hydra
+import torch
 import rootutils
 from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
@@ -45,13 +46,22 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Tuple[dict, dict] with metrics and dict with all instantiated objects.
     """
-    assert cfg.ckpt_path
+    assert cfg.ckpt_path, "Checkpoint path must be specified in the config!"
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
+
+    checkpoint = torch.load(cfg.ckpt_path, map_location= "cuda" if torch.cuda.is_available() else "cpu")
+    #Compiled models are saved with the prefix "net._orig_mod." in the state_dict keys
+    updated_state_dict = {
+            k.replace("net._orig_mod.", "net."): v for k, v in checkpoint["state_dict"].items()
+    }
+      
+    model.load_state_dict(updated_state_dict, strict=False)
+    log.info(f"Loaded checkpoint from {cfg.ckpt_path}")
 
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
@@ -66,23 +76,23 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "logger": logger,
         "trainer": trainer,
     }
-
     if logger:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
 
     log.info("Starting testing!")
-    trainer.test(model=model, datamodule=datamodule, ckpt_path=cfg.ckpt_path)
+    trainer.test(model=model, datamodule=datamodule, ckpt_path=None)  # ckpt_path=None since we manually loaded weights
 
     # for predictions use trainer.predict(...)
     # predictions = trainer.predict(model=model, dataloaders=dataloaders, ckpt_path=cfg.ckpt_path)
 
     metric_dict = trainer.callback_metrics
-
+    
     return metric_dict, object_dict
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="eval.yaml")
+
+@hydra.main(version_base="1.3", config_path="../configs", config_name="eval_default.yaml")
 def main(cfg: DictConfig) -> None:
     """Main entry point for evaluation.
 

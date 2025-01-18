@@ -1,0 +1,51 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=gns_experiment
+defaults:
+  - override /model: gns
+  - override /data: 2d_tgv
+  - override /trainer: default
+  - override /callbacks: custom
+
+# all parameters below will be merged with parameters from default configurations set above
+# this allows you to overwrite only specified parameters
+
+tags: ["tgv", "gns"]
+
+#for eval
+ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
+
+data:
+  max_pushforward_steps: 5
+  batch_size: 1
+
+model:
+  net:
+    dataset_path: ${data.data_dir} # Path to the dataset
+    connectivity_radius: 0.029  #Default value for 2D TGV dataset(derived from metadata), can be adjusted
+  noise_std: 3e-4
+  pbc: true
+  pushforward:
+    steps: [0, 500, 700]   # Training steps unlocking stages
+    unrolls: #[0, 2, ${max_pushforward_steps}]   # Unroll step options for each stage
+      - 0
+      - 2
+      - ${data.max_pushforward_steps}
+    probs: [7, 2, 1]       # Relative probabilities for each unroll step
+
+trainer:
+  min_epochs: 0
+  max_epochs: 2
+  gradient_clip_val: 0.5
+  accelerator: "gpu"
+
+logger:
+  wandb:
+    tags: ${tags}
+    group: "gns"
+  aim:
+    experiment: "gns"
+
+seed: 12345
+

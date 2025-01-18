@@ -6,6 +6,8 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
 from torchvision.datasets import MNIST
 from torchvision.transforms import transforms
 
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class MNISTDataModule(LightningDataModule):
     """`LightningDataModule` for the MNIST dataset.

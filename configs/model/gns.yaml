@@ -1,0 +1,55 @@
+# configs/model/gns.yaml
+
+# Specify the correct path to the GNSLitModule in the Lightning module
+_target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
+
+net:
+  # Specify the correct path to the GNS model implementation (Simulator) within the GNSLitModule
+  _target_: src.models.components.gns.Simulator  # Adjust this to the actual path for your GNS simulator model
+  particle_dimension: 2
+  node_in: 26
+  edge_in: 3
+  latent_dim: 128
+  num_message_passing_steps: 10
+  mlp_num_layers: 2
+  mlp_hidden_dim: 128
+  noise_std: 6.7e-4 
+  num_particle_types: 9
+  particle_type_embedding_size: 16
+
+# Optimizer configuration
+optimizer:
+  _partial_: true
+  _target_: torch.optim.Adam
+  lr: 0.001
+
+# Scheduler configuration
+scheduler:
+  _partial_: true
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
+  optimizer: ${..optimizer} # Reference optimizer from the model configuration
+  min_lr: 0.0001
+  steps_per_epoch: 1
+  warmup_epochs: 0
+  max_epochs: 10
+
+# Set whether to compile the model
+compile: true
+
+# Adjust based on the available hardware
+device: "cuda"
+
+#Random-walk noise
+noise_std: 6.7e-4
+
+#By default, pushforward is disabled
+pushforward:
+  steps: [-1]
+  unrolls: [0]
+  probs: [1]
+
+num_rollout_steps: 20
+num_eval_steps: 10
+
+#Periodic boundary conditions
+pbc: true
