@@ -5,5 +5,3 @@ num_workers: 4
 input_seq_length: 6
 max_pushforward_steps: 5
 max_rollout_steps: 20
-
-

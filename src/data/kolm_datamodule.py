@@ -6,13 +6,12 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from src.data.components.h5dataset import H5Dataset
 
 
-class TGVDataModule(LightningDataModule):
+class KOLMDataModule(LightningDataModule):
     def __init__(
         self,
-        data_dir: str = "data/2D_TGV_2500_10kevery100",
+        data_dir: str = "data/2D_KOLM_4096_20kevery10",
         batch_size: int = 32,
         input_seq_length: int = 6,
-        max_pushforward_steps: int = 0,
         max_rollout_steps: int = 0,
         nl_backend: str = "jaxmd_vmap",
         num_workers: int = 0,
@@ -23,7 +22,6 @@ class TGVDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.input_seq_length = input_seq_length
         self.max_rollout_steps = max_rollout_steps
-        self.max_pushforward_steps = max_pushforward_steps
         self.nl_backend = nl_backend
         self.num_workers = num_workers
         self.pin_memory = pin_memory
@@ -40,7 +38,7 @@ class TGVDataModule(LightningDataModule):
             self.train_dataset = H5Dataset(split="train",
                                            dataset_path=self.data_dir,
                                            input_seq_length=self.input_seq_length,
-                                           extra_seq_length=0, #self.max_pushforward_steps, #self.max_rollout_steps,   #FIXME:CONFIG CHANGED TO valid: TRUE 
+                                           extra_seq_length=0,
                                            nl_backend=self.nl_backend)
             self.val_dataset = H5Dataset(split="valid", 
                                          dataset_path=self.data_dir, 

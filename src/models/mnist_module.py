@@ -9,7 +9,7 @@ from torchmetrics.classification.accuracy import Accuracy
 class MNISTLitModule(LightningModule):
     """Example of a `LightningModule` for MNIST classification.
 
-    A `LightningModule` implements 7 key methods:
+    A `LightningModule` implements 8 key methods:
 
     ```python
     def __init__(self):

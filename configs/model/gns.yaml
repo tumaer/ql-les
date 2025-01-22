@@ -6,10 +6,11 @@ _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path f
 net:
   # Specify the correct path to the GNS model implementation (Simulator) within the GNSLitModule
   _target_: src.models.components.gns.Simulator  # Adjust this to the actual path for your GNS simulator model
-  particle_dimension: 2
+  # particle_dimension: 2
   node_in: 26
   edge_in: 3
   latent_dim: 128
+  node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
   num_message_passing_steps: 10
   mlp_num_layers: 2
   mlp_hidden_dim: 128
@@ -39,7 +40,7 @@ compile: true
 # Adjust based on the available hardware
 device: "cuda"
 
-#Random-walk noise
+#Shifting noise
 noise_std: 6.7e-4
 
 #By default, pushforward is disabled

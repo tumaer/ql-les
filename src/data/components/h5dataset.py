@@ -214,13 +214,17 @@ class H5Dataset(Dataset):
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load and transpose the trajectory
-        pos_input = traj_pos[slice_from:slice_to].transpose((1, 0, 2))
-
-        particle_type = traj["particle_type"][:]
-
-        pos_input = torch.Tensor(pos_input)
-        particle_type = torch.Tensor(particle_type).int()
+        pos_input = torch.Tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
+        
+        particle_type = torch.Tensor( traj["particle_type"][:]).int()
+        
         position_dict = {"position": pos_input, "particle_type": particle_type}
+        
+        #if ds contains physical velocity target
+        if "u" in traj:
+            traj_u_vel = traj["u"]
+            u_input_and_target = torch.Tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
+            position_dict["u"] = u_input_and_target
         
         return position_dict
 
@@ -243,13 +247,18 @@ class H5Dataset(Dataset):
         traj_pos = traj["position"]
         # load only a slice of the positions. Now, this is an array in memory.
         pos_input_and_target = traj_pos[el_idx : el_idx + self.subseq_length]
-        pos_input_and_target = pos_input_and_target.transpose((1, 0, 2))
+        pos_input_and_target = torch.Tensor(pos_input_and_target.transpose((1, 0, 2)))
 
-        particle_type = traj["particle_type"][:]
+        particle_type = torch.Tensor(traj["particle_type"][:]).int()
         
-        pos_input_and_target = torch.Tensor(pos_input_and_target)
-        particle_type = torch.Tensor(particle_type).int()
         position_dict = {"position": pos_input_and_target, "particle_type": particle_type}
+        
+        #if ds contains physical velocity target
+        if "u" in traj:
+            traj_u_vel = traj["u"]
+            u_input_and_target = traj_u_vel[el_idx : el_idx + self.subseq_length]
+            u_input_and_target = torch.Tensor(u_input_and_target.transpose((1, 0, 2)))
+            position_dict["u"] = u_input_and_target
         
         return position_dict
     
@@ -264,11 +273,23 @@ class H5Dataset(Dataset):
         """
         position_dict = self.getter(idx)
         
-        return Data(
-        enc_pos=position_dict["position"][:, :self.input_seq_length],
-        n_particles_per_trajectory=position_dict["position"].shape[0],
-        particle_type=position_dict["particle_type"],
-        target_pos=position_dict["position"][:, self.input_seq_length:])
+        if "u" in position_dict:
+            return Data(
+                case_name=self.name,
+                enc_pos=position_dict["position"][:, :self.input_seq_length],
+                target_pos=position_dict["position"][:, self.input_seq_length:],
+                enc_u=position_dict["u"][:, :self.input_seq_length], #TODO: explore and discuss why :1 is used (velocity calculation of the shifting v_vel)
+                target_u=position_dict["u"][:, self.input_seq_length:],
+                n_particles_per_trajectory=position_dict["position"].shape[0],
+                particle_type=position_dict["particle_type"]
+            )
+        else:
+            return Data(
+            enc_pos=position_dict["position"][:, :self.input_seq_length],
+            target_pos=position_dict["position"][:, self.input_seq_length:],
+            n_particles_per_trajectory=position_dict["position"].shape[0],
+            particle_type=position_dict["particle_type"]
+            )
 
     def __len__(self):
         return self.num_samples
