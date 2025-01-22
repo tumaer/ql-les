@@ -1,0 +1,10 @@
+#No pushforward
+_target_: src.data.kolm_datamodule.KOLMDataModule
+data_dir: ${paths.data_dir}/2D_KOLM_4096_20kevery10
+batch_size: 1
+num_workers: 4
+input_seq_length: 6
+max_rollout_steps: 20 #should be 20 for a 20-step rollout
+
+
+

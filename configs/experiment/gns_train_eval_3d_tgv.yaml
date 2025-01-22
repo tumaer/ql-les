@@ -49,4 +49,3 @@ logger:
     group: "gns"
   aim:
     experiment: "gns"
-

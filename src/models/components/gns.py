@@ -80,11 +80,12 @@ def pbc_duplication(most_recent_positions, domain_size):
 def get_random_walk_noise_for_position_sequence(position_sequence, noise_std_last_step, boundaries, pbc=True):
     """Returns random-walk noise in the velocity applied to the position."""
     velocity_sequence = time_diff(position_sequence, boundaries, pbc)
+    
     num_velocities = velocity_sequence.shape[1]
+    
     velocity_sequence_noise = torch.randn(list(velocity_sequence.shape)) * (noise_std_last_step/num_velocities**0.5)
-
     velocity_sequence_noise = torch.cumsum(velocity_sequence_noise, dim=1)
-
+    
     position_sequence_noise = torch.cat([
         torch.zeros_like(velocity_sequence_noise[:, 0:1]),
         torch.cumsum(velocity_sequence_noise, dim=1)], dim=1)
@@ -202,6 +203,8 @@ class EncodeProcessDecode(nn.Module):
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
+        case
+        
     ):
         super(EncodeProcessDecode, self).__init__()
         self._encoder = Encoder(
@@ -227,21 +230,27 @@ class EncodeProcessDecode(nn.Module):
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
         )
+        self._case = case
 
     def forward(self, x, edge_index, e_features):
         # x: (E, node_in)
         x, e_features = self._encoder(x, edge_index, e_features)
         x, e_features = self._processor(x, edge_index, e_features)
         x = self._decoder(x)
-        return x
+        if self._case == "KOLM":
+            a_u, a_v = torch.chunk(x, 2, dim=-1)
+            return a_u, a_v
+        else:
+            return x
 
 class Simulator(nn.Module):
     def __init__(
         self,
-        particle_dimension,
+        #particle_dimension, #FIXME: given the dim of the dataset, this used to be how the model determined the output dimension
         node_in,
         edge_in,
         latent_dim,
+        node_out,
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
@@ -258,51 +267,83 @@ class Simulator(nn.Module):
         self.noise_std = noise_std
         self.metadata = load_metadata(Path(dataset_path))
         self._boundaries = self.metadata["bounds"]
+        self._case = self.metadata["case"]
         self._pbc = self.metadata["periodic_boundary_conditions"]
         self._device = device
         self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
 
         self._encode_process_decode = EncodeProcessDecode(
             node_in=node_in,
-            node_out=particle_dimension,
+            node_out=node_out, #used to be particle_dimension
             edge_in=edge_in,
             latent_dim=latent_dim,
             num_message_passing_steps=num_message_passing_steps,
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
+            case=self._case,
         
         )
         
     def set_metadata_device(self, device=None):
         if device is None:
             device = self._device
-        self.normalization_stats = {
-            "acceleration": {
-                "mean": torch.FloatTensor(self.metadata["acc_mean"]).to(device),
+        if self._case == "KOLM":
+            self.normalization_stats = {
+            "v_acceleration": {
+                "mean": torch.FloatTensor(self.metadata["av_mean"]).to(device),
                 "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["acc_std"]) ** 2 + self.noise_std**2
+                    torch.FloatTensor(self.metadata["av_std"]) ** 2 + self.noise_std**2
                 ).to(device),
             },
-            "velocity": {
-                "mean": torch.FloatTensor(self.metadata["vel_mean"]).to(device),
+            "v_velocity": {
+                "mean": torch.FloatTensor(self.metadata["v_mean"]).to(device),
                 "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["vel_std"]) ** 2 + self.noise_std**2
+                    torch.FloatTensor(self.metadata["v_std"]) ** 2 + self.noise_std**2
+                ).to(device),
+            },
+            "u_acceleration": {
+                "mean": torch.FloatTensor(self.metadata["au_mean"]).to(device),
+                "std": torch.sqrt(
+                    torch.FloatTensor(self.metadata["au_std"]) ** 2 + self.noise_std**2
+                ).to(device),
+            },
+            "u_velocity": {
+                "mean": torch.FloatTensor(self.metadata["u_mean"]).to(device),
+                "std": torch.sqrt(
+                    torch.FloatTensor(self.metadata["u_std"]) ** 2 + self.noise_std**2
                 ).to(device),
             },
         }
+        
+        else:
+            self.normalization_stats = {
+                "v_acceleration": {
+                    "mean": torch.FloatTensor(self.metadata["acc_mean"]).to(device),
+                    "std": torch.sqrt(
+                        torch.FloatTensor(self.metadata["acc_std"]) ** 2 + self.noise_std**2
+                    ).to(device),
+                },
+                "v_velocity": {
+                    "mean": torch.FloatTensor(self.metadata["vel_mean"]).to(device),
+                    "std": torch.sqrt(
+                        torch.FloatTensor(self.metadata["vel_std"]) ** 2 + self.noise_std**2
+                    ).to(device),
+                },
+            }
         self._boundaries = (
             torch.tensor(self.metadata["bounds"], requires_grad=False).float().to(device)
         )
-        #Preprocess the boundaries
+        #Subract the ends of the box to get its size (used for PBC)
         self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
     
     def forward(self):
         pass
 
-    def _build_graph_from_raw(self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, batch_size=1):
+    def _build_graph_from_raw(self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
         n_total_points = position_sequence.shape[0]
         most_recent_position = position_sequence[:, -1] # (n_nodes, 2)
-        velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
+        v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
+        
         # senders and receivers are integers of shape (E,)
 
         if not pbc:
@@ -310,23 +351,6 @@ class Simulator(nn.Module):
                                                             n_particles_per_trajectory, 
                                                             self._connectivity_radius)
         elif pbc:
-            #PBC Compatible Implementation ver 1: "Simulate time-integrated coarse-grained MD with multi-scale graph neural networks"
-            # single_cell = ((self._boundaries[:,1] - self._boundaries[:,0]).to(self._device)).unsqueeze(0)
-            stacked_cells = self._boundaries.repeat(batch_size, 1)  
-            #O(n) implementation
-            # senders, receivers, displacements, distances, edge_types = compute_connectivity_pbc_celllist(positions=most_recent_position, 
-            #                                                         box=self._boundaries, 
-            #                                                         radius=self._connectivity_radius, 
-            #                                                         bonds=None, 
-            #                                                         add_self_edges=False)
-            #O(n^2) implementation
-            # senders, receivers, displacements, distances, edge_type = self.compute_connectivity_pbc(positions=most_recent_position, 
-            #                                                                                         lattices=stacked_cells, 
-            #                                                                                         n_node=n_particles_per_trajectory,
-            #                                                                                         radius=self._connectivity_radius, 
-            #                                                                                         bonds=None, 
-            #                                                                                         add_self_edges=False)
-            
             #Pytorch Geometric Implementation
             senders, receivers = self._compute_connecitivity_pbc_pyg(most_recent_position, 
                                                             n_particles_per_trajectory, 
@@ -335,10 +359,17 @@ class Simulator(nn.Module):
         node_features = []
         
         # Normalized velocity sequence, merging spatial an time axis.
-        velocity_stats = self.normalization_stats["velocity"]
-        normalized_velocity_sequence = (velocity_sequence - velocity_stats['mean']) / velocity_stats['std']
-        flat_velocity_sequence = normalized_velocity_sequence.view(n_total_points, -1)
-        node_features.append(flat_velocity_sequence)
+        v_velocity_stats = self.normalization_stats["v_velocity"]
+        v_normalized_velocity_sequence = (v_velocity_sequence - v_velocity_stats['mean']) / v_velocity_stats['std']
+        v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
+        node_features.append(v_flat_velocity_sequence)
+        
+        if self._case == "KOLM":
+            u_velocity_sequence = kwargs["u_velocity"]
+            u_velocity_stats = self.normalization_stats["u_velocity"]
+            u_normalized_velocity_sequence = (u_velocity_sequence - u_velocity_stats['mean']) / u_velocity_stats['std']
+            u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
+            node_features.append(u_flat_velocity_sequence)
 
         # Normalized clipped distances to lower and upper boundaries, if not PBC.
         if not pbc:
@@ -360,27 +391,20 @@ class Simulator(nn.Module):
         # Collect edge features.
         edge_features = []
 
-        # if not pbc:
         # Relative displacement and distances normalized to radius
         # (E, 2)
         # normalized_relative_displacements = (
         #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
         # ) / self._connectivity_radius
-        normalized_relative_displacements = (
-            most_recent_position[senders, :] - most_recent_position[receivers, :]
-        ) / self._connectivity_radius
+        normalized_relative_displacements = most_recent_position[senders, :] - most_recent_position[receivers, :]
+        if pbc: 
+            normalized_relative_displacements = wrap_displacement(normalized_relative_displacements, self._boundaries) #TODO: determine if this is necessary!
+        normalized_relative_displacements /= self._connectivity_radius
         edge_features.append(normalized_relative_displacements)
 
         normalized_relative_distances = torch.norm(normalized_relative_displacements, dim=-1, keepdim=True)
         edge_features.append(normalized_relative_distances)
             
-        # elif pbc:
-        #     edge_features.append(displacements) # displacements calculated in compute_connectivity_pbc
-        #     edge_features.append(distances) # distances calculated in compute_connectivity_pbc
-        
-        # else:
-        #     raise ValueError("Invalid periodic boundary condition type.")
-
         return torch.cat(node_features, dim=-1), torch.stack([senders, receivers]), torch.cat(edge_features, dim=-1)
 
     def _compute_connectivity(self, node_features, n_particles_per_trajectory, radius, add_self_edges=True):
@@ -395,8 +419,7 @@ class Simulator(nn.Module):
     
     def _compute_connecitivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
          #Default is 2 examples per batch
-         # # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
-        radius = radius + 1e-5
+         # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
         combined_positions = pbc_duplication(most_recent_position, self._boundaries)
         n_particles_per_trajectory = torch.tensor([combined_positions.shape[0]], requires_grad=False).to(self._device)
         batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory)]).to(self._device)
@@ -414,7 +437,7 @@ class Simulator(nn.Module):
         senders = filtered_edge_index[1, :]
         return receivers, senders
     
-    def _decoder_postprocessor(self, normalized_acceleration, position_sequence, pbc=True):
+    def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
         """
         Decoder postprocessor with PBC support.
 
@@ -428,37 +451,78 @@ class Simulator(nn.Module):
         """
         
         # The model produces the output in normalized space so we apply inverse normalization.
-        acceleration_stats = self.normalization_stats["acceleration"]
-        acceleration = (
-            normalized_acceleration * acceleration_stats['std']
-        ) + acceleration_stats['mean']
-
-        # Use an Euler integrator to go from acceleration to position, assuming dt = 1.
+        v_acceleration_stats = self.normalization_stats["v_acceleration"]
+        v_acceleration = (
+            a_v_pred * v_acceleration_stats['std']
+        ) + v_acceleration_stats['mean'] 
+        #Transform the v_acceleration to physical space
+        effective_dt = self.metadata["dt"] * self.metadata["write_every"]
+        v_acceleration /= effective_dt ** 2
+        
         most_recent_position = position_sequence[:, -1]
-        most_recent_velocity = (most_recent_position - position_sequence[:, -2])
+        most_recent_v_velocity = (most_recent_position - position_sequence[:, -2])
         if pbc:
-            most_recent_velocity = wrap_displacement(most_recent_velocity, self._boundaries)
+            most_recent_v_velocity = wrap_displacement(most_recent_v_velocity, self._boundaries)
+            most_recent_v_velocity /= effective_dt
+        
+        if self._case == "KOLM":
+            vel_solver = kwargs["vel_solver"]
+            u_velocity = kwargs["u_velocity"]
+            a_u_pred = kwargs["a_u_pred"]
+            u_acceleration_stats = self.normalization_stats["u_acceleration"]
+            u_acceleration = (
+                a_u_pred * u_acceleration_stats['std']
+            ) + u_acceleration_stats['mean']
 
-        # Update velocity and position
-        new_velocity = most_recent_velocity + acceleration  # * dt = 1
-        new_position = most_recent_position + new_velocity  # * dt = 1
+            most_recent_u_velocity = u_velocity[:, -1]
 
-        if pbc:
-        # Wrap new positions within boundaries
-            new_position = wrap_position(new_position, self._boundaries)
+            # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
+            if vel_solver == "simple":
+                new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
+                new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
+
+            elif vel_solver == "tvf":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = new_u_velocity + v_acceleration
+                
+            elif vel_solver == "neural_sph":
+                new_v_velocity = most_recent_v_velocity + v_acceleration
+                new_u_velocity = new_v_velocity + u_acceleration
+            
+            #Doesn't make sense to wrap the position and the displacements, because this is supposed to be accounted for by the model
+            # if pbc:
+            #     # Wrap new positions within boundaries
+            #     new_position = wrap_position(new_position, self._boundaries)
+            #     new_u_velocity = wrap_displacement(new_u_velocity, self._boundaries)
+            new_position = most_recent_position + new_v_velocity  # * dt = 1    
+            
+            return new_position, new_u_velocity
+        
+        else:
+            new_v_velocity = most_recent_v_velocity + v_acceleration
+            new_position = most_recent_position + new_v_velocity    
             
         return new_position
 
-    def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, batch_size=1):
+    def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
         if pbc:
             current_positions = current_positions % self._boundaries
-        node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, batch_size)
-        predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
-        next_position = self._decoder_postprocessor(predicted_normalized_acceleration, current_positions, pbc)
-        return next_position
+            
+        if self._case == "KOLM":
+            u_velocity = kwargs["u_velocity"]
+            vel_solver = kwargs["vel_solver"]
+            node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+            a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
+            next_position, new_u_velocity = self._decoder_postprocessor(a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, vel_solver=vel_solver, u_velocity=u_velocity)
+            return next_position, new_u_velocity
+        else:
+            node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc)
+            predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
+            next_position = self._decoder_postprocessor(predicted_normalized_acceleration, current_positions, pbc)
+            return next_position
 
-    def predict_accelerations(self, next_position, position_sequence_noise, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, batch_size=1, unroll_steps=0):
-        #FIXME: next_position needs to drop dim=1 because the dataloader is configured for both training and validation, but for training this dimension is not necessary.
+    def predict_accelerations(self, next_position, position_sequence_noise, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
+        #next_position needs to drop dim=1 because the dataloader is configured for both training and validation, but for training this dim is not necessary.
         next_position = next_position.squeeze(1)
         if pbc:
             noisy_position_sequence = wrap_position(position_sequence + position_sequence_noise, self._boundaries)
@@ -469,31 +533,51 @@ class Simulator(nn.Module):
         else: 
             raise ValueError("Invalid periodic boundary condition type.")
         
-        node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, batch_size)
-        predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
-
-        #Compute the target normalized acceleration
-        target_normalized_acceleration = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc)
         
-        return predicted_normalized_acceleration, target_normalized_acceleration
-    
+        #Compute the target normalized acceleration
+        if self._case == "KOLM":
+            u_velocity = kwargs["u_velocity"]
+            next_u_velocity = kwargs["next_u_velocity"]
+            node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+            a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
+            a_v_target, a_u_target = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc, next_u_velocity=next_u_velocity, u_velocity=u_velocity)
+            
+            return (a_u_pred, a_v_pred), (a_u_target, a_v_target)   
+        else:
+            node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc)
+            predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
+            target_nomralized_acceleration = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc)
+            
+            return predicted_normalized_acceleration, target_nomralized_acceleration
+     
+        
+         
     #PBC COMPATIBLE IMPLEMENTATION
-    def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True):
+    def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):
         """Inverse of `_decoder_postprocessor`, with PBC support."""
-        #TODO: Go over the shapes with Artur
         # Handle PBC for position differences
         previous_position = position_sequence[:, -1]
         if pbc:
-            previous_velocity = wrap_displacement(previous_position - position_sequence[:, -2], self._boundaries)
-            next_velocity = wrap_displacement(next_position - previous_position, self._boundaries)
+            previous_v_velocity = wrap_displacement(previous_position - position_sequence[:, -2], self._boundaries)
+            next_v_velocity = wrap_displacement(next_position - previous_position, self._boundaries)
         elif not pbc:
-            previous_velocity = previous_position - position_sequence[:, -2]
-            next_velocity = next_position - previous_position
+            previous_v_velocity = previous_position - position_sequence[:, -2]
+            next_v_velocity = next_position - previous_position
         
         # Compute acceleration
-        acceleration = next_velocity - previous_velocity
+        v_acceleration = next_v_velocity - previous_v_velocity
         # Normalize acceleration (reverse normalization for loss calculation)
-        acceleration_stats = self.normalization_stats["acceleration"]        
-        normalized_acceleration = (acceleration - acceleration_stats['mean']) / acceleration_stats['std'] 
+        v_acceleration_stats = self.normalization_stats["v_acceleration"]  
+        v_normalized_acceleration = (v_acceleration - v_acceleration_stats['mean']) / v_acceleration_stats['std']
         
-        return normalized_acceleration 
+        if self._case == "KOLM":
+            next_u_velocity = wrap_displacement(kwargs["next_u_velocity"], self._boundaries).squeeze(1) #Drop the dim=1
+            previous_u_velocity = wrap_displacement(kwargs["u_velocity"][:, -1], self._boundaries)
+            u_acceleration = next_u_velocity - previous_u_velocity
+            u_acceleration_stats = self.normalization_stats["u_acceleration"]   
+            u_normalized_acceleration = (u_acceleration - u_acceleration_stats['mean']) / u_acceleration_stats['std']
+            
+            return v_normalized_acceleration, u_normalized_acceleration
+        else:   
+            return v_normalized_acceleration
+        
