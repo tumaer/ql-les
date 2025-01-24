@@ -2,7 +2,7 @@ import torch
 import numpy as np
 # from torch_geometric import radius_graph
 from torch_scatter import scatter, segment_coo, segment_csr
-from torchCompactRadius import radiusSearch
+# from torchCompactRadius import radiusSearch
 from src.utils.train_utils import wrap_displacement, wrap_position
 # from torch_geometric.utils import radius_graph #TODO: Fix this import error
 

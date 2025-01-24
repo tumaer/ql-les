@@ -6,7 +6,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from src.data.components.h5dataset import H5Dataset
 
 
-class TGVDataModule(LightningDataModule):
+class SPHDataModule(LightningDataModule):
     def __init__(
         self,
         data_dir: str = "data/2D_TGV_2500_10kevery100",

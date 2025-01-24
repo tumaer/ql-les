@@ -5,52 +5,54 @@
 defaults:
   - override /model: gns
   - override /data: 2d_tgv
-  - override /trainer: default
+  - override /trainer: gpu
   - override /callbacks: custom
+  - override /logger: wandb
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["tgv", "gns"]
-
 #for eval
 # ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
 
-data:
-  max_pushforward_steps: 5
-  batch_size: 1
-
 model:
-  _target_: src.models.gns_tgv_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
+  _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
   net:
     node_in: 26
     edge_in: 3
     latent_dim: 128
     node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
     dataset_path: ${data.data_dir} # Path to the dataset
-    connectivity_radius: 0.029  #Default value for 2D TGV dataset(derived from metadata), can be adjusted
-    
-  noise_std: 3e-4 #Random-walk noise
+    noise_std: 5.e-4 #Random-walk noise
   pbc: true
   pushforward:
-    steps: [0, 500, 700]   # Training steps unlocking stages
+    steps: [-1, 200_000, 300_000, 400_000]   # Training steps unlocking stages
     unrolls: #[0, 2, ${max_pushforward_steps}]   # Unroll step options for each stage
       - 0
+      - 1
       - 2
       - ${data.max_pushforward_steps}
-    probs: [7, 2, 1]       # Relative probabilities for each unroll step
+    probs: [18, 2, 1, 1]       # Relative probabilities for each unroll step
+  alpha_v: 1.0
+  alpha_u: 0.0
 
 trainer:
   min_epochs: 0
-  max_epochs: 2
-  gradient_clip_val: 0.5
-  accelerator: "gpu"
+  max_epochs: 42  # on 2D TGV with 12000 samples, this means 504k steps
+  # gradient_clip_val: 0.5
+  num_sanity_val_steps: 1 # before training starts
+  log_every_n_steps: 1000  # TODO: increse to 1000
+  limit_val_batches: 20  # evaluate only first 20 batches
+  # # the next two arguments run validation every N training steps, and should be used 
+  # # with model_checkpoint: every_n_train_steps: 10_000
+  # check_val_every_n_epoch: null
+  # val_check_interval: 10_000
+  check_val_every_n_epoch: 1
+
+tags: ["tgv", "gns"]
 
 logger:
   wandb:
-    tags: ${tags}
-    group: "gns"
-  aim:
-    experiment: "gns"
+    project: "tgv2d"
 
 seed: 12345

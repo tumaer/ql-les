@@ -1,7 +1,7 @@
-_target_: src.data.tgv_datamodule.TGVDataModule
+_target_: src.data.sph_datamodule.SPHDataModule
 data_dir: ${paths.data_dir}/2D_TGV_2500_10kevery100
 batch_size: 1
 num_workers: 4
 input_seq_length: 6
-max_pushforward_steps: 5
+max_pushforward_steps: 3
 max_rollout_steps: 20

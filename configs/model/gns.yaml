@@ -21,27 +21,33 @@ net:
 # Optimizer configuration
 optimizer:
   _partial_: true
-  _target_: torch.optim.Adam
-  lr: 0.001
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 1.e-8
 
-# Scheduler configuration
+# # Scheduler configuration
+# scheduler:
+#   _partial_: true
+#   _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
+#   optimizer: ${..optimizer} # Reference optimizer from the model configuration
+#   min_lr: 0.0001
+#   steps_per_epoch: 1
+#   warmup_epochs: 0
+#   max_epochs: 10
+
 scheduler:
+  _target_: src.utils.schedulers.ExpDecayLR
   _partial_: true
-  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
-  optimizer: ${..optimizer} # Reference optimizer from the model configuration
-  min_lr: 0.0001
-  steps_per_epoch: 1
-  warmup_epochs: 0
-  max_epochs: 10
+  init_value: ${..optimizer.lr}
+  transition_steps: 100_000
+  decay_rate: 0.1
+  end_value: 1.0e-6
 
 # Set whether to compile the model
 compile: true
 
 # Adjust based on the available hardware
-device: "cuda"
-
-#Shifting noise
-noise_std: 6.7e-4
+device: ${trainer.accelerator}
 
 #By default, pushforward is disabled
 pushforward:

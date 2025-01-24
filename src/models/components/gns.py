@@ -7,7 +7,7 @@ from src.utils.neighbor_search_algorithms import compute_connectivity_pbc #Alter
 from src.utils.data_utils import load_metadata
 from pathlib import Path
 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 os.makedirs('train_log', exist_ok=True)
 os.makedirs('rollouts', exist_ok=True)
 
@@ -254,7 +254,6 @@ class Simulator(nn.Module):
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
-        connectivity_radius,
         noise_std,
         dataset_path,
         num_particle_types,
@@ -262,10 +261,10 @@ class Simulator(nn.Module):
         device='cuda',
     ):
         super(Simulator, self).__init__()
-        self._connectivity_radius = connectivity_radius
         self._num_particle_types = num_particle_types
         self.noise_std = noise_std
         self.metadata = load_metadata(Path(dataset_path))
+        self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._boundaries = self.metadata["bounds"]
         self._case = self.metadata["case"]
         self._pbc = self.metadata["periodic_boundary_conditions"]
@@ -364,7 +363,7 @@ class Simulator(nn.Module):
         v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
         node_features.append(v_flat_velocity_sequence)
         
-        if self._case == "KOLM":
+        if self.alpha_u != 0:  # TODO: find a better condition!
             u_velocity_sequence = kwargs["u_velocity"]
             u_velocity_stats = self.normalization_stats["u_velocity"]
             u_normalized_velocity_sequence = (u_velocity_sequence - u_velocity_stats['mean']) / u_velocity_stats['std']
