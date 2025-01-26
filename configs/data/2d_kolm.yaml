@@ -1,5 +1,5 @@
 #No pushforward
-_target_: src.data.kolm_datamodule.KOLMDataModule
+_target_: src.data.sph_datamodule.SPHDataModule
 data_dir: ${paths.data_dir}/2D_KOLM_4096_20kevery10
 batch_size: 1
 num_workers: 4

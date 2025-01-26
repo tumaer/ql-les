@@ -264,8 +264,8 @@ class Simulator(nn.Module):
         self._num_particle_types = num_particle_types
         self.noise_std = noise_std
         self.metadata = load_metadata(Path(dataset_path))
-        self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._boundaries = self.metadata["bounds"]
+        self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._case = self.metadata["case"]
         self._pbc = self.metadata["periodic_boundary_conditions"]
         self._device = device
@@ -499,7 +499,7 @@ class Simulator(nn.Module):
         
         else:
             new_v_velocity = most_recent_v_velocity + v_acceleration
-            new_position = most_recent_position + new_v_velocity    
+            new_position = wrap_position((most_recent_position + new_v_velocity), self._boundaries)   
             
         return new_position
 
@@ -548,8 +548,6 @@ class Simulator(nn.Module):
             target_nomralized_acceleration = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc)
             
             return predicted_normalized_acceleration, target_nomralized_acceleration
-     
-        
          
     #PBC COMPATIBLE IMPLEMENTATION
     def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):
@@ -570,8 +568,8 @@ class Simulator(nn.Module):
         v_normalized_acceleration = (v_acceleration - v_acceleration_stats['mean']) / v_acceleration_stats['std']
         
         if self._case == "KOLM":
-            next_u_velocity = wrap_displacement(kwargs["next_u_velocity"], self._boundaries).squeeze(1) #Drop the dim=1
-            previous_u_velocity = wrap_displacement(kwargs["u_velocity"][:, -1], self._boundaries)
+            next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
+            previous_u_velocity = kwargs["u_velocity"][:, -1]
             u_acceleration = next_u_velocity - previous_u_velocity
             u_acceleration_stats = self.normalization_stats["u_acceleration"]   
             u_normalized_acceleration = (u_acceleration - u_acceleration_stats['mean']) / u_acceleration_stats['std']

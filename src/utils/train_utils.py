@@ -1,4 +1,7 @@
 import torch
+import numpy as np
+from collections import defaultdict
+from typing import List, Dict, Optional
 
 def push_forward_sample_steps(seed, step, pushforward):
     """
@@ -65,161 +68,201 @@ def wrap_position(position, boundaries):
     """Wrap position to account for periodic boundary conditions."""
     return position % boundaries
 
-def eval_single_rollout(simulator, features, num_rollout_steps, device, pbc):
-    initial_positions = features["enc_pos"]
-    ground_truth_positions = features["target_pos"]
-    dim = initial_positions.shape[-1]
-    current_positions = initial_positions
-    
-    predictions = []
-    for step in range(num_rollout_steps):
-        next_position = simulator.predict_positions(
-            current_positions=initial_positions,
-            n_particles_per_trajectory=features["n_particles_per_trajectory"],
-            particle_types=features["particle_type"],
-            pbc=pbc
-        )  # (n_nodes, dim)
-        # Update kinematic particles from prescribed trajectory.
-        kinematic_mask = (features["particle_type"] == 3).clone().detach()
-        next_position_ground_truth = ground_truth_positions[:, step]
-        kinematic_mask = kinematic_mask.bool()[:, None].expand(-1, dim)
-        next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
-        predictions.append(next_position)
-        current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
-    predictions = torch.stack(predictions)  # (time, n_nodes, 2)
-    ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
-    loss = (predictions - ground_truth_positions) ** 2
-    output_dict = {
-        "initial_positions": initial_positions.permute(1, 0, 2).cpu().numpy(),
-        "predicted_rollout": predictions.cpu().numpy(),
-        "ground_truth_rollout": ground_truth_positions.cpu().numpy(),
-        "particle_types": features["particle_type"].cpu().numpy(),
-    }
-    return output_dict, loss
+def particle_mse(pred, target, non_kinematic_mask):
+    loss = (pred - target) ** 2
+    loss = loss.sum(dim=-1)
+    num_non_kinematic = non_kinematic_mask.sum()
+    loss = torch.where(non_kinematic_mask.bool(), loss, torch.zeros_like(loss))
+    loss = loss.sum() / num_non_kinematic
+    return loss
 
-def eval_rollout(batch, simulator, metadata, num_rollout_steps, num_eval_steps=1, pbc=True, device='cuda'):
-    #TODO: https://github.com/jax-md/jax-md/blob/main/jax_md/space.py#L217
-    eval_loss = []
+def eval_rollout(batch, simulator, metadata, num_rollout_steps, device, active_metrics, pbc=True, u_vel=False, **kwargs):
+    """
+    Evaluate rollout by computing the mean squared error over trajectories.
+
+    Args:
+        batch: Data batch containing input features and target positions.
+        simulator: The simulation model.
+        metadata: Dictionary containing metadata (e.g., boundaries).
+        num_rollout_steps: Number of rollout steps to evaluate.
+        device: Device to perform computations on.
+        pbc: Whether to use periodic boundary conditions.
+
+    Returns:
+        Mean squared error metrics from the rollout evaluation.
+    """
+    boundaries = torch.tensor(metadata["bounds"], device=device)[:, 1] - torch.tensor(metadata["bounds"], device=device)[:, 0]
+    
     simulator.eval()
     with torch.no_grad():
         features = {
-        "enc_pos": batch.enc_pos, # 
-        "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-        "particle_type": batch.particle_type,
-        "target_pos": batch.target_pos}
+            "enc_pos": batch.enc_pos,
+            "n_particles_per_trajectory": batch.n_particles_per_trajectory,
+            "particle_type": batch.particle_type,
+            "target_pos": batch.target_pos,
+            "bounds": boundaries
+        }
 
-        trajectory_rollout, loss = eval_single_rollout(simulator, features, num_rollout_steps, device, pbc)
-        trajectory_rollout['metadata'] = metadata
-        eval_loss.append(loss)
+        if u_vel:
+            features.update({
+                "u_velocity": batch.enc_u,
+                "next_u_velocity": batch.target_u,
+                "vel_solver": kwargs["vel_solver"]
+            })
+
+        computed_metrics = eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel)
+
     simulator.train()
-    return torch.stack(eval_loss).mean()
+    return computed_metrics
 
-def kolm_eval_single_rollout(simulator, features, num_rollout_steps, pbc, **kwargs):
-    #TODO: discuss implementation, wheter we need a u_vel_loss
-    initial_positions = features["enc_pos"]
+
+def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=False):
+    """
+    Evaluate a single trajectory rollout.
+
+    Args:
+        simulator: The simulation model.
+        features: Dictionary containing input features.
+        num_rollout_steps: Number of rollout steps to evaluate.
+        pbc: Whether to use periodic boundary conditions.
+
+    Returns:
+        Dictionary containing predicted and ground truth losses.
+    """
     ground_truth_positions = features["target_pos"]
-    current_positions = initial_positions
-    dim = initial_positions.shape[-1]
-    
+    current_positions = features["enc_pos"] #initial positions
+    dim = current_positions.shape[-1]
     position_predictions = []
     
-    if features["case_name"] == "kol2d":
-        initial_u_velocity = kwargs["u_velocity"]
-        ground_truth_u_velocity = kwargs["next_u_velocity"]
-        current_u_velocity = initial_u_velocity
-        vel_solver=kwargs["vel_solver"]
+    if u_vel is False:
+        for step in range(num_rollout_steps):
+            next_position = simulator.predict_positions(
+                current_positions=current_positions,
+                n_particles_per_trajectory=features["n_particles_per_trajectory"],
+                particle_types=features["particle_type"],
+                pbc=pbc,
+            )
+            kinematic_mask = (features["particle_type"] == 3).bool()[:, None].expand(-1, dim)
+            next_position_ground_truth = ground_truth_positions[:, step]
+            next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
+
+            position_predictions.append(next_position)
+            current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
+
+        position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
+        ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
+        
+        computed_metrics = comupte_metrics(position_predictions, ground_truth_positions, metadata, active_metrics, features["bounds"], pbc=pbc)
+                
+        return computed_metrics
+    else:   
+        current_u_velocity = features["u_velocity"] #initial u_velocity
+        ground_truth_u_velocity = features["next_u_velocity"]
+        vel_solver = features["vel_solver"]
         u_vel_predictions = []
         for step in range(num_rollout_steps):
-                next_position, new_u_velocity = simulator.predict_positions(
-                    current_positions=initial_positions,
+            next_position, new_u_velocity = simulator.predict_positions(
+                    current_positions=current_positions,
                     n_particles_per_trajectory=features["n_particles_per_trajectory"],
                     particle_types=features["particle_type"],
                     pbc=pbc,
-                    u_velocity=initial_u_velocity,
+                    u_velocity=current_u_velocity,
                     vel_solver=vel_solver
-                )  # (n_nodes, dim)
-                # Update kinematic particles from prescribed trajectory.
-                kinematic_mask = (features["particle_type"] == 3).clone().detach()
-                next_position_ground_truth = ground_truth_positions[:, step]
-                kinematic_mask = kinematic_mask.bool()[:, None].expand(-1, dim)
-                
-                next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
-                position_predictions.append(next_position)
-                current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
-                
-                u_vel_predictions.append(new_u_velocity)
-                current_u_velocity = torch.cat([current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1)
-                
-                position_predictions = torch.stack(position_predictions) # (time, n_nodes, 2)
-                ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
-                u_vel_predictions = torch.stack(u_vel_predictions) # (time, n_nodes, 2)
-                ground_truth_u_velocity = ground_truth_u_velocity.permute(1, 0, 2)
-                
-                position_loss = (position_predictions - ground_truth_positions) ** 2
-                u_vel_loss = (u_vel_predictions - ground_truth_u_velocity) ** 2
-    
-                return position_loss, u_vel_loss
-            
-        else:
-            for step in range(num_rollout_steps):
-                next_position = simulator.predict_positions(
-                    current_positions=initial_positions,
-                    n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                    particle_types=features["particle_type"],
-                    pbc=pbc
-                )  # (n_nodes, dim)
-                # Update kinematic particles from prescribed trajectory.
-                kinematic_mask = (features["particle_type"] == 3).clone().detach()
-                next_position_ground_truth = ground_truth_positions[:, step]
-                kinematic_mask = kinematic_mask.bool()[:, None].expand(-1, dim)
-                next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
-                position_predictions.append(next_position)
-                current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
-                
-            position_predictions = torch.stack(position_predictions) # (time, n_nodes, 2)
-            ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
-            position_loss = (position_predictions - ground_truth_positions) ** 2
-            
-            return position_loss
+            )
+            kinematic_mask = (features["particle_type"] == 3).bool()[:, None].expand(-1, dim)
+            next_position_ground_truth = ground_truth_positions[:, step]
+            next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
-def kolm_eval_rollout(batch, simulator, num_rollout_steps, num_eval_steps=1, pbc=True, **kwargs):
-    position_eval_loss = []
-    
-    simulator.eval()
-    with torch.no_grad():        
-        features = {
-            "case_name": batch.case_name[0],
-            "target_pos": batch.target_pos,
-            "enc_pos": batch.enc_pos,
-            "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-            "particle_type": batch.particle_type
-        }
-        if batch.case_name[0] == "kol2d":
-            u_velocity = batch.enc_u
-            next_u_velocity = batch.target_u
-            vel_solver = kwargs["vel_solver"]
-            u_vel_eval_loss = []
-            
-            position_loss, u_vel_loss = kolm_eval_single_rollout(simulator,
-                                                                features, 
-                                                                num_rollout_steps, 
-                                                                pbc, 
-                                                                vel_solver=vel_solver,
-                                                                u_velocity=u_velocity, 
-                                                                next_u_velocity=next_u_velocity)
-            position_eval_loss.append(position_loss)
-            u_vel_eval_loss.append(u_vel_loss)
-            
-            simulator.train()
-            return torch.stack(position_eval_loss).mean(), torch.stack(u_vel_eval_loss).mean()
-        else:
-            position_loss = kolm_eval_single_rollout(simulator,
-                                                    features, 
-                                                    num_rollout_steps, 
-                                                    pbc)
+            position_predictions.append(next_position)
+            u_vel_predictions.append(new_u_velocity)
 
-            position_eval_loss.append(position_loss)
-            
-            simulator.train()
-            return torch.stack(position_eval_loss).mean()
+            current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
+            current_u_velocity = torch.cat([current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1)
+
+        position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
+        u_vel_predictions = torch.stack(u_vel_predictions)  # (time, n_nodes, dim)
+        ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
+        ground_truth_u_velocity = ground_truth_u_velocity.permute(1, 0, 2)
+
+        computed_position_metrics = comupte_metrics(position_predictions, ground_truth_positions, metadata, active_metrics, features["bounds"], pbc=pbc, u_vel=True)
+        #TODO: discuss metrics for u_vel
+        computed_vel_metrics = ((u_vel_predictions - ground_truth_u_velocity) ** 2).mean(dim=(1, 2))
+        return (computed_position_metrics, computed_vel_metrics)
+
+def comupte_metrics(predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False):
+    """
+    Compute metrics for the given predictions and targets.
+
+    Args:
+        predictions: Predicted positions or velocities.
+        targets: Ground truth positions or velocities.
+        metadata: Dictionary containing metadata (e.g., dx).
+        active_metrics: List of active metrics to compute.
+        pbc: Whether to use periodic boundary conditions.
+
+    Returns:
+        Dictionary containing computed metrics.
+    """
+    computed_metrics = {}
+    loss_ranges = [1, 5, 10, 20, 50, 100]
+    for metric_name in active_metrics:
+        if metric_name == "mse":
+            loss = (wrap_displacement((predictions - targets), boundaries) **2)
+            computed_metrics["mse"] = loss.mean(dim=(1, 2))
+            for t in loss_ranges:
+                if t < predictions.shape[0]:  # Ensure valid range
+                    computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
+        elif metric_name == "mae":
+            loss = torch.abs(wrap_displacement((predictions - targets), boundaries))
+            computed_metrics["mae"] = loss.mean(dim=(1, 2))
+            for t in loss_ranges:
+                if t < predictions.shape[0]: 
+                    computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range
+        elif metric_name == "e_kin":
+            computed_metrics["e_kin"] = compute_kinetic_energy(predictions, targets, boundaries, metadata, stride=10)
+
+    return computed_metrics
+
+
+def compute_kinetic_energy(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    boundaries: torch.Tensor,
+    metadata: Dict,
+    stride: int = 10,
+) -> Dict[str, torch.Tensor]:
+    """Compute Kinetic Energy with periodic boundary conditions."""
+    # Extract metadata values
+    dt = metadata["dt"] * metadata["write_every"]  # Time step
+    dx = metadata["dx"]                            # Spatial resolution
+    dim = metadata["dim"]                          # Number of spatial dimensions
     
+    # Compute velocities for predictions and targets
+    # Shape after subtraction: (time-1, nodes, dim)
+    velocity_pred = wrap_displacement(
+        predictions[1::stride, :, :] - predictions[:-1:stride, :, :], boundaries
+    ) / dt  # Divide by time step
+    velocity_target = wrap_displacement(
+        targets[1::stride, :, :] - targets[:-1:stride, :, :], boundaries
+    ) / dt  # Divide by time step
+
+    # Compute kinetic energy
+    # Squared velocities: (time-1, nodes, dim)
+    # Summing over dim gives per-node KE: (time-1, nodes)
+    e_kin_pred =(velocity_pred**2).sum(1) * (dx**dim)  # Multiply by volume element
+    e_kin_target =(velocity_target**2).sum(1) * (dx**dim)
+
+    # Averages over time and nodes
+    e_kin_pred_mean = e_kin_pred.mean()  # Average over time and nodes
+    e_kin_target_mean = e_kin_target.mean()
+
+    # Mean squared error
+    mse = ((e_kin_pred - e_kin_target) ** 2).mean()
+    return mse
+    #TODO: check which metrics are more informative
+    # return {
+    #     "predicted": e_kin_pred_mean,
+    #     "target": e_kin_target_mean,
+    #     "mse": mse,
+    # }
+

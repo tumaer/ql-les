@@ -6,7 +6,7 @@ from torch import Tensor
 from lightning import LightningModule
 from src.models.components.gns import get_random_walk_noise_for_position_sequence
 from src.utils.train_utils import (
-    push_forward_sample_steps, eval_rollout, integrate, kolm_eval_rollout
+    push_forward_sample_steps, eval_rollout, integrate, kolm_eval_rollout, particle_mse
 )
 
 class GNSLitModule(LightningModule):
@@ -27,6 +27,7 @@ class GNSLitModule(LightningModule):
         vel_solver: str = "simple",
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
+        active_metrics: Dict[str, Any] = None,
     ) -> None:
         """Initialize the GNS model's LightningModule.
 
@@ -59,26 +60,16 @@ class GNSLitModule(LightningModule):
         self.num_rollout_steps = num_rollout_steps
         self.num_eval_steps = num_eval_steps
         self.vel_solver = vel_solver
+        self.active_metrics = active_metrics
         
     def forward(
         self,
         features: Dict[str, Tensor],
     ) -> Tensor:
-        sampled_noise = get_random_walk_noise_for_position_sequence(
-            features["position"], 
-            boundaries=self.net._boundaries,
-            noise_std_last_step=self.net.noise_std,
-            ).to(self.device)
-        
-        non_kinematic_mask = (features["particle_type"] != 3).clone().detach()
-        sampled_noise *= non_kinematic_mask.view(-1, 1, 1)
-        if not self.training:
-            sampled_noise *= 0.0
-
         if self.alpha_u != 0.0:  # if true, we recover LagrangeBench; TODO: think of better condition
             pred, target_normalized_acceleration = self.net.predict_accelerations(
                 next_position=features["next_position"],
-                position_sequence_noise=sampled_noise,
+                position_sequence_noise=features["sampled_noise"],
                 position_sequence=features["position"],
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],
                 particle_types=features["particle_type"],
@@ -89,16 +80,16 @@ class GNSLitModule(LightningModule):
         else:
             pred, target_normalized_acceleration = self.net.predict_accelerations(
                 next_position=features["next_position"],
-                position_sequence_noise=sampled_noise,
+                position_sequence_noise=features["sampled_noise"],
                 position_sequence=features["position"],
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],
                 particle_types=features["particle_type"],
                 pbc=features["pbc"]
             )
         
-        return pred, target_normalized_acceleration, non_kinematic_mask
+        return pred, target_normalized_acceleration
     
-    def model_step(self, features: Dict[str, Tensor]) -> Tensor:
+    def model_step(self, batch: object) -> Tensor:
         """Perform a single forward pass through the model and compute the loss for a_u and a_v."""
         # Determine the number of pushforward steps, if applicable
         unroll_steps = 0
@@ -107,12 +98,39 @@ class GNSLitModule(LightningModule):
                 seed=self.seed, step=self.global_step, pushforward=self.pushforward
             )
             self.seed = updated_seed
+        #Random walk noise
+        sampled_noise = get_random_walk_noise_for_position_sequence(
+            position_sequence=batch.enc_pos, 
+            boundaries=self.net._boundaries,
+            noise_std_last_step=self.net.noise_std,
+            ).to(self.device)
+        
+        non_kinematic_mask = (batch.particle_type != 3).clone().detach()
+        sampled_noise *= non_kinematic_mask.view(-1, 1, 1)
+        if not self.training:
+            sampled_noise *= 0.0
+        
+        # Prepare features for the forward pass
+        features = {
+            "next_position": batch.target_pos[:, 0, :],  # Only the first target position
+            "position": batch.enc_pos,
+            "n_particles_per_trajectory": batch.n_particles_per_trajectory,
+            "particle_type": batch.particle_type,
+            "pbc": self.pbc,
+            "normalization_stats": self.net.normalization_stats,
+            "boundaries": self.net._boundaries,
+            "sampled_noise": sampled_noise,         
+        }
+        if self.alpha_u != 0.0:
+            features["u_velocity"] = batch.enc_u
+            features["next_u_velocity"] = batch.target_u
 
         # Perform pushforward integration if unroll_steps > 0
         if unroll_steps > 0:
             # print(f"Pushing forward {unroll_steps} steps!!!")
             for _ in range(unroll_steps):
-                pred, target, non_kinematic_mask = self.forward(features)
+                features["next_position"] = batch.target_pos[:, unroll_steps, :]
+                pred, target = self.forward(features)
                 next_pos = integrate(
                     normalized_acceleration=pred,
                     position_sequence=features["position"],
@@ -125,16 +143,8 @@ class GNSLitModule(LightningModule):
         else:
             # Forward pass
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
-            pred, target, non_kinematic_mask = self.forward(features)
-
-        def particle_mse(pred, target, non_kinematic_mask):
-            loss = (pred - target) ** 2
-            loss = loss.sum(dim=-1)
-            num_non_kinematic = non_kinematic_mask.sum()
-            loss = torch.where(non_kinematic_mask.bool(), loss, torch.zeros_like(loss))
-            loss = loss.sum() / num_non_kinematic
-            return loss
-
+            pred, target = self.forward(features)
+            
         if self.alpha_u == 0.0:
             # Calculate loss
             loss = particle_mse(pred, target, non_kinematic_mask)
@@ -154,21 +164,9 @@ class GNSLitModule(LightningModule):
         return loss
 
     
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        # Evaluate the model on the training batch 
-        features = {
-            "next_position": batch.target_pos,
-            "position": batch.enc_pos,
-            "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-            "particle_type": batch.particle_type,
-            "pbc": self.pbc,
-            "normalization_stats": self.net.normalization_stats,
-            "boundaries": self.net._boundaries,         
-        }
-        if self.alpha_u != 0.0:
-            features["u_velocity"] = batch.enc_u
-            features["next_u_velocity"] = batch.target_u
-        loss = self.model_step(features)
+    def training_step(self, batch: object) -> torch.Tensor:
+        # Evaluate the model on the training batch and calculate the loss
+        loss = self.model_step(batch)
         # Log metrics
         self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size)   
         return loss 
@@ -177,22 +175,54 @@ class GNSLitModule(LightningModule):
         """Perform a single validation step, using the forward method to infer positions."""
         #ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
-        # TODO: add further metrics, e.g., kinetic energy MSE.
         if self.alpha_u == 0.0:
-            loss = eval_rollout(batch, self.net, self.net.metadata, self.num_rollout_steps, self.num_eval_steps, self.pbc, batch.batch_size)
-            self.log("val/loss", loss, prog_bar=True, batch_size=batch.batch_size)
-        else:
-            position_loss, u_vel_loss = kolm_eval_rollout(batch, 
-                                                        self.net,
-                                                        self.num_rollout_steps, 
-                                                        self.num_eval_steps, 
-                                                        self.pbc,
-                                                        vel_solver=self.vel_solver)
+            loss = eval_rollout(batch=batch,
+                                simulator=self.net, 
+                                metadata=self.net.metadata, 
+                                num_rollout_steps=self.num_rollout_steps,
+                                pbc=self.pbc, 
+                                device=self.net._device,
+                                active_metrics=self.active_metrics,
+                                u_vel=False)
+            #TODO: make this more general (for-loops mess up the automatic calculations from the logger across trajectories)
+            #MSE
+            self.log("val/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/mse1", loss["mse1"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/mse5", loss["mse5"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/mse10", loss["mse10"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/mse20", loss["mse20"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/mse50", loss["mse50"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/mse100", loss["mse100"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
             
-            self.log("val/postion_loss", position_loss, prog_bar=True, batch_size=batch.batch_size)
-            self.log("val/u_velocity_loss", u_vel_loss, prog_bar=True, batch_size=batch.batch_size)
-            self.log("val/loss", position_loss + u_vel_loss, prog_bar=True, batch_size=batch.batch_size)
-            return position_loss, u_vel_loss
+            self.log("val/msestd", loss["mse"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/msestd1", loss["mse1"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/msestd5", loss["mse5"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/msestd10", loss["mse10"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/msestd20", loss["mse20"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/msestd50", loss["mse50"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            # self.log("val/msestd100", loss["mse100"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            
+            #MAE
+            
+            #E_KIN
+            self.log("val/loss_ekin", loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)            
+        else:
+            position_loss, u_vel_loss = eval_rollout(batch=batch,
+                                                        simulator=self.net,
+                                                        metadata=self.net.metadata, 
+                                                        num_rollout_steps=self.num_rollout_steps, 
+                                                        pbc=self.pbc,
+                                                        vel_solver=self.vel_solver,
+                                                        device=self.net._device,
+                                                        active_metrics=self.active_metrics,
+                                                        u_vel=True)   
+            
+            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("val/loss_ekin", position_loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+
+  
 
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
@@ -216,8 +246,8 @@ class GNSLitModule(LightningModule):
             self.log("test/u_velocity_loss", u_vel_loss, prog_bar=True, batch_size=batch.batch_size)
 
     def on_fit_start(self) -> None:
-        self.net.set_metadata_device(self.net._device)
-        
+        self.net.set_metadata_device(self.net._device)    
+    
     def on_train_epoch_start(self):
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
         print(f"Current epoch learning rate: {lr}") 

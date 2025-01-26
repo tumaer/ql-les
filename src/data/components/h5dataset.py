@@ -275,10 +275,9 @@ class H5Dataset(Dataset):
         
         if "u" in position_dict:
             return Data(
-                case_name=self.name,
                 enc_pos=position_dict["position"][:, :self.input_seq_length],
                 target_pos=position_dict["position"][:, self.input_seq_length:],
-                enc_u=position_dict["u"][:, :self.input_seq_length], #TODO: explore and discuss why :1 is used (velocity calculation of the shifting v_vel)
+                enc_u=position_dict["u"][:, :self.input_seq_length],
                 target_u=position_dict["u"][:, self.input_seq_length:],
                 n_particles_per_trajectory=position_dict["position"].shape[0],
                 particle_type=position_dict["particle_type"]

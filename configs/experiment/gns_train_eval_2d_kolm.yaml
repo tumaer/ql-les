@@ -5,7 +5,7 @@
 defaults:
   - override /model: gns
   - override /data: 2d_kolm
-  - override /trainer: default
+  - override /trainer: gpu
   - override /callbacks: custom
 
 # all parameters below will be merged with parameters from default configurations set above
@@ -24,7 +24,7 @@ data:
   batch_size: 1
 
 model:
-  _target_: src.models.gns_kolm_module.GNSLitModule
+  _target_: src.models.gns_module.GNSLitModule
   net:
     # particle_dimension: 2
     node_in: 38
@@ -38,19 +38,26 @@ model:
     num_particle_types: 9
     particle_type_embedding_size: 16
     dataset_path: ${data.data_dir} # Path to the dataset
-    connectivity_radius: 0.15  #Default value for KOLM dataset(derived from metadata), can be adjusted
-  
+  pushforward: null
   vel_solver: "neural_sph"
-  noise_std: 3e-4 #Random-walk noise
   pbc: true
   alpha_u: 1.0
   alpha_v: 1.0
+  active_metrics: ["mse", "e_kin"]
 
 trainer:
   min_epochs: 0
-  max_epochs: 2
-  gradient_clip_val: 0.5
-  accelerator: "gpu"
+  max_epochs: 42  # on 2D TGV with 12000 samples, this means 504k steps
+  # gradient_clip_val: 0.5
+  num_sanity_val_steps: 1 # before training starts
+  log_every_n_steps: 1000
+  limit_val_batches: 20  # evaluate this number of (sub-)trajectories
+  limit_train_batches: 500  # train on this number of (sub-)trajectories
+  # # the next two arguments run validation every N training steps, and should be used 
+  # # with model_checkpoint: every_n_train_steps: 10_000
+  # check_val_every_n_epoch: null
+  # val_check_interval: 10_000
+  check_val_every_n_epoch: 1
 
 logger:
   wandb:

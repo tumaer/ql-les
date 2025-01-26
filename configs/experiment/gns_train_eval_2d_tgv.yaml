@@ -18,10 +18,12 @@ defaults:
 model:
   _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
   net:
-    node_in: 26
+    node_in: 18
     edge_in: 3
-    latent_dim: 128
+    latent_dim: 16
     node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
+    num_message_passing_steps: 4
+    particle_type_embedding_size: 8
     dataset_path: ${data.data_dir} # Path to the dataset
     noise_std: 5.e-4 #Random-walk noise
   pbc: true
@@ -35,6 +37,8 @@ model:
     probs: [18, 2, 1, 1]       # Relative probabilities for each unroll step
   alpha_v: 1.0
   alpha_u: 0.0
+  active_metrics: ["mse", "mae", "e_kin"]
+
 
 trainer:
   min_epochs: 0
@@ -42,7 +46,7 @@ trainer:
   # gradient_clip_val: 0.5
   num_sanity_val_steps: 1 # before training starts
   log_every_n_steps: 1000  # TODO: increse to 1000
-  limit_val_batches: 20  # evaluate only first 20 batches
+  limit_val_batches: 20  # evaluate this number of (sub-)trajectories
   # # the next two arguments run validation every N training steps, and should be used 
   # # with model_checkpoint: every_n_train_steps: 10_000
   # check_val_every_n_epoch: null

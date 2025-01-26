@@ -40,7 +40,7 @@ class SPHDataModule(LightningDataModule):
             self.train_dataset = H5Dataset(split="train",
                                            dataset_path=self.data_dir,
                                            input_seq_length=self.input_seq_length,
-                                           extra_seq_length=0, #self.max_pushforward_steps, #self.max_rollout_steps,   #FIXME:CONFIG CHANGED TO valid: TRUE 
+                                           extra_seq_length=self.max_pushforward_steps,
                                            nl_backend=self.nl_backend)
             self.val_dataset = H5Dataset(split="valid", 
                                          dataset_path=self.data_dir, 
