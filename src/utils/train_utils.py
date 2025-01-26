@@ -219,7 +219,7 @@ def comupte_metrics(predictions, targets, metadata, active_metrics, boundaries, 
                 if t < predictions.shape[0]: 
                     computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range
         elif metric_name == "e_kin":
-            computed_metrics["e_kin"] = compute_kinetic_energy(predictions, targets, boundaries, metadata, stride=10)
+            computed_metrics["e_kin"] = compute_kinetic_energy(predictions, targets, boundaries, metadata)
 
     return computed_metrics
 
@@ -229,7 +229,7 @@ def compute_kinetic_energy(
     targets: torch.Tensor,
     boundaries: torch.Tensor,
     metadata: Dict,
-    stride: int = 10,
+    stride: int = 1,
 ) -> Dict[str, torch.Tensor]:
     """Compute Kinetic Energy with periodic boundary conditions."""
     # Extract metadata values

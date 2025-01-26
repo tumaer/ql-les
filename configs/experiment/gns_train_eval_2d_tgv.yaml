@@ -20,9 +20,9 @@ model:
   net:
     node_in: 18
     edge_in: 3
-    latent_dim: 16
+    latent_dim: 128
     node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
-    num_message_passing_steps: 4
+    num_message_passing_steps: 10
     particle_type_embedding_size: 8
     dataset_path: ${data.data_dir} # Path to the dataset
     noise_std: 5.e-4 #Random-walk noise

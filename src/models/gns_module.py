@@ -6,7 +6,7 @@ from torch import Tensor
 from lightning import LightningModule
 from src.models.components.gns import get_random_walk_noise_for_position_sequence
 from src.utils.train_utils import (
-    push_forward_sample_steps, eval_rollout, integrate, kolm_eval_rollout, particle_mse
+    push_forward_sample_steps, eval_rollout, integrate, particle_mse
 )
 
 class GNSLitModule(LightningModule):
@@ -228,22 +228,30 @@ class GNSLitModule(LightningModule):
         """Perform a single test step, using the forward method to infer positions."""
         # Evaluate the trajectory rollout
         if self.alpha_u == 0.0:
-            # if batch_idx >= self.num_eval_steps:
-            #     return None  # Skip batches beyond num_eval_steps
-            batch_idx = 0 
-            loss = eval_rollout(batch, self.net, self.net.metadata, self.num_rollout_steps, self.num_eval_steps, self.pbc, batch.batch_size)
-            self.log("test/loss", loss, prog_bar=True, batch_size=batch.batch_size)
-            batch_idx += 1
+            loss = eval_rollout(batch=batch,
+                                simulator=self.net, 
+                                metadata=self.net.metadata, 
+                                num_rollout_steps=self.num_rollout_steps,
+                                pbc=self.pbc, 
+                                device=self.net._device,
+                                active_metrics=self.active_metrics,
+                                u_vel=False)
+            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
         else:
-            position_loss, u_vel_loss = kolm_eval_rollout(batch, 
-                                                            self.net,
-                                                            self.num_rollout_steps, 
-                                                            self.num_eval_steps, 
-                                                            self.pbc,
-                                                            vel_solver=self.vel_solver)
+            position_loss, u_vel_loss = eval_rollout(batch=batch,
+                                                        simulator=self.net,
+                                                        metadata=self.net.metadata, 
+                                                        num_rollout_steps=self.num_rollout_steps, 
+                                                        pbc=self.pbc,
+                                                        vel_solver=self.vel_solver,
+                                                        device=self.net._device,
+                                                        active_metrics=self.active_metrics,
+                                                        u_vel=True)
                 
-            self.log("test/postion_loss", position_loss, prog_bar=True, batch_size=batch.batch_size)
-            self.log("test/u_velocity_loss", u_vel_loss, prog_bar=True, batch_size=batch.batch_size)
+            self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("test/loss_ekin", position_loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
 
     def on_fit_start(self) -> None:
         self.net.set_metadata_device(self.net._device)    
