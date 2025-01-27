@@ -40,7 +40,7 @@ def push_forward_sample_steps(seed, step, pushforward):
     
     return updated_seed, unroll_steps[unroll_steps_idx].item()
 
-def integrate(normalized_acceleration, position_sequence, normalization_stats, boundaries):
+def integrate(normalized_acceleration, position_sequence, normalization_stats, boundaries, pbc=True):
     """The model produces the output in normalized space so we apply inverse normalization."""
     # Inverse normalize the acceleration
     acceleration = (
@@ -50,12 +50,14 @@ def integrate(normalized_acceleration, position_sequence, normalization_stats, b
     # Use an Euler integrator to go from acceleration to position, assuming dt = 1.
     most_recent_position = position_sequence[:, -1]
     most_recent_velocity = (most_recent_position - position_sequence[:, -2])
-    most_recent_velocity = wrap_displacement(most_recent_velocity, boundaries)
+    if pbc:
+        most_recent_velocity = wrap_displacement(most_recent_velocity, boundaries)
     
     # Update velocity and position
     new_velocity = most_recent_velocity + acceleration
     new_position = most_recent_position + new_velocity
-    new_position = wrap_position(most_recent_position, boundaries)
+    if pbc:
+        new_position = wrap_position(most_recent_position, boundaries)
         
     return new_position
 
@@ -129,8 +131,8 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
     Returns:
         Dictionary containing predicted and ground truth losses.
     """
-    ground_truth_positions = features["target_pos"]
-    current_positions = features["enc_pos"] #initial positions
+    ground_truth_positions = features["target_pos"]  # (N, T_out, D)
+    current_positions = features["enc_pos"] #initial positions (N, T_in, D)
     dim = current_positions.shape[-1]
     position_predictions = []
     

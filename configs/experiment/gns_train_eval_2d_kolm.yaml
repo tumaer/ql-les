@@ -6,7 +6,10 @@ defaults:
   - override /model: gns
   - override /data: 2d_kolm
   - override /trainer: gpu
+  - override /vars: kolm2d
   - override /callbacks: custom
+  - override /logger: wandb
+
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
@@ -14,30 +17,18 @@ defaults:
 #for eval
 # ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
 
-callbacks:
-  model_summary:
-    max_depth: 1
-
-data:
-  batch_size: 1
 
 model:
   _target_: src.models.gns_module.GNSLitModule
   net:
     # particle_dimension: 2
-    node_in: 38
+    node_in: 38 # ((past_v=5 + past_u=6) * dim=2) + (embed_size=16)
     edge_in: 3
-    latent_dim: 128
     node_out: 4 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
-    num_message_passing_steps: 10
-    mlp_num_layers: 10
-    mlp_hidden_dim: 128
-    noise_std: 6.7e-4 
-    num_particle_types: 9
-    particle_type_embedding_size: 16
     dataset_path: ${data.data_dir} # Path to the dataset
+    noise_std: 3.0e-4  # TODO:  Ablate this.
   pushforward: null
-  vel_solver: "neural_sph"
+  vel_solver: "simple"  # "simple", "tvf", "neural_sph"
   pbc: true
   alpha_u: 1.0
   alpha_v: 1.0
@@ -45,7 +36,7 @@ model:
 
 trainer:
   min_epochs: 0
-  max_epochs: 42  # on 2D TGV with 12000 samples, this means 504k steps
+  max_epochs: 26  # on 2D KOLM with 19950 samples, this means 518k steps
   # gradient_clip_val: 0.5
   num_sanity_val_steps: 1 # before training starts
   log_every_n_steps: 1000

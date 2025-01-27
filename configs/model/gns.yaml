@@ -23,7 +23,7 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: ${..scheduler.init_value}
   weight_decay: 1.e-8
 
 # # Scheduler configuration
@@ -39,7 +39,7 @@ optimizer:
 scheduler:
   _target_: src.utils.schedulers.ExpDecayLR
   _partial_: true
-  init_value: ${..optimizer.lr}
+  init_value: 1.0e-4
   transition_steps: 100_000
   decay_rate: 0.1
   end_value: 1.0e-6

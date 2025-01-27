@@ -74,6 +74,7 @@ class GNSLitModule(LightningModule):
                 pbc=features["pbc"],
                 u_velocity=features["u_velocity"],
                 next_u_velocity=features["next_u_velocity"],
+                vel_solver = self.vel_solver
             )
         else:
             pred, target_normalized_acceleration = self.net.predict_accelerations(
@@ -129,11 +130,13 @@ class GNSLitModule(LightningModule):
             for _ in range(unroll_steps):
                 features["next_position"] = batch.target_pos[:, unroll_steps, :]
                 pred, target = self.forward(features)
+                # TODO: Fix pushforward somehow?
                 next_pos = integrate(
                     normalized_acceleration=pred,
                     position_sequence=features["position"],
                     normalization_stats=features["normalization_stats"]["v_acceleration"],
                     boundaries=features["boundaries"],
+                    pbc=features["pbc"],
                 )
                 features["position"] = torch.cat(
                     [features["position"][:, 1:], next_pos[:, None, :]], dim=1
@@ -148,16 +151,15 @@ class GNSLitModule(LightningModule):
             loss = particle_mse(pred, target, non_kinematic_mask)
         else:
             # Split predictions and targets into a_u and a_v
-            a_u_pred, a_v_pred = pred
-            a_u_target, a_v_target = target
+            a_v_pred, a_u_pred = pred
+            a_v_target, a_u_target = target
 
-            # Calculate MSE loss for a_u
-            loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
-            # Calculate MSE loss for a_v
+            # Calculate MSE loss
             loss_v = particle_mse(a_v_pred, a_v_target, non_kinematic_mask)
+            loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
 
             # Weighted combined loss
-            loss = self.alpha_u * loss_u + self.alpha_v * loss_v
+            loss = self.alpha_v * loss_v + self.alpha_u * loss_u
 
         return loss
 

@@ -1,4 +1,3 @@
 dim: 2
 num_rollout_steps: 20
-max_pushforward_steps: 3
 input_seq_length: 6

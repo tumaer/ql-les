@@ -268,6 +268,7 @@ class Simulator(nn.Module):
         self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._case = self.metadata["case"]
         self._pbc = self.metadata["periodic_boundary_conditions"]
+        self._effective_dt = self.metadata["dt"] * self.metadata["write_every"]
         self._device = device
         self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
 
@@ -335,6 +336,33 @@ class Simulator(nn.Module):
         #Subract the ends of the box to get its size (used for PBC)
         self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
     
+    def _norm(self, vel, key):
+        # key = "ua/uu/va/vv"
+        kv, ka = key
+        ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
+    
+        stats = self.normalization_stats[f"{kv}_{ka}"]
+        return (vel - stats['mean']) / stats['std']
+
+    def _denorm(self, vel, key):
+        kv, ka = key
+        ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
+    
+        stats = self.normalization_stats[f"{kv}_{ka}"]
+        return vel * stats['std'] + stats['mean']
+        
+    def shift_fn(self, r, dr):
+        if self._pbc:
+            return wrap_position(r + dr, self._boundaries)
+        else:
+            return r + dr
+    
+    def displ_fn(self, r1, r2):
+        if self._pbc:
+            return wrap_displacement(r1 - r2, self._boundaries)
+        else:
+            return r1 - r2
+
     def forward(self):
         pass
 
@@ -358,15 +386,13 @@ class Simulator(nn.Module):
         node_features = []
         
         # Normalized velocity sequence, merging spatial an time axis.
-        v_velocity_stats = self.normalization_stats["v_velocity"]
-        v_normalized_velocity_sequence = (v_velocity_sequence - v_velocity_stats['mean']) / v_velocity_stats['std']
+        v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
         v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
         node_features.append(v_flat_velocity_sequence)
         
         if self.alpha_u != 0:  # TODO: find a better condition!
-            u_velocity_sequence = kwargs["u_velocity"]
-            u_velocity_stats = self.normalization_stats["u_velocity"]
-            u_normalized_velocity_sequence = (u_velocity_sequence - u_velocity_stats['mean']) / u_velocity_stats['std']
+            u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
+            u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
             u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
             node_features.append(u_flat_velocity_sequence)
 
@@ -374,7 +400,7 @@ class Simulator(nn.Module):
         if not pbc:
             # Normalized clipped distances to lower and upper boundaries.
             # boundaries are an array of shape [num_dimensions, 2], where the second
-            # axis, provides the lower/upper boundaries.
+            # axis, provides the lower/upper bofundaries.
             boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(self._device) # torch.tensor(self._boundaries, requires_grad=False).float().to(self._device)
             distance_to_lower_boundary = (most_recent_position - boundaries[:, 0][None])
             distance_to_upper_boundary = (boundaries[:, 1][None] - most_recent_position)
@@ -395,9 +421,8 @@ class Simulator(nn.Module):
         # normalized_relative_displacements = (
         #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
         # ) / self._connectivity_radius
-        normalized_relative_displacements = most_recent_position[senders, :] - most_recent_position[receivers, :]
-        if pbc: 
-            normalized_relative_displacements = wrap_displacement(normalized_relative_displacements, self._boundaries) #TODO: determine if this is necessary!
+        normalized_relative_displacements = self.displ_fn(most_recent_position[senders, :], most_recent_position[receivers, :])
+        
         normalized_relative_displacements /= self._connectivity_radius
         edge_features.append(normalized_relative_displacements)
 
@@ -450,28 +475,16 @@ class Simulator(nn.Module):
         """
         
         # The model produces the output in normalized space so we apply inverse normalization.
-        v_acceleration_stats = self.normalization_stats["v_acceleration"]
-        v_acceleration = (
-            a_v_pred * v_acceleration_stats['std']
-        ) + v_acceleration_stats['mean'] 
-        #Transform the v_acceleration to physical space
-        # effective_dt = self.metadata["dt"] * self.metadata["write_every"]
-        # v_acceleration /= effective_dt ** 2
+        v_acceleration = self._denorm(a_v_pred, "va")
         
         most_recent_position = position_sequence[:, -1]
-        most_recent_v_velocity = (most_recent_position - position_sequence[:, -2])
-        if pbc:
-            most_recent_v_velocity = wrap_displacement(most_recent_v_velocity, self._boundaries)
-            # most_recent_v_velocity /= effective_dt
-        
+        most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
+
         if self._case == "KOLM":
             vel_solver = kwargs["vel_solver"]
             u_velocity = kwargs["u_velocity"]
             a_u_pred = kwargs["a_u_pred"]
-            u_acceleration_stats = self.normalization_stats["u_acceleration"]
-            u_acceleration = (
-                a_u_pred * u_acceleration_stats['std']
-            ) + u_acceleration_stats['mean']
+            u_acceleration = self._denorm(a_u_pred, "ua")
 
             most_recent_u_velocity = u_velocity[:, -1]
 
@@ -482,24 +495,19 @@ class Simulator(nn.Module):
 
             elif vel_solver == "tvf":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
-                new_v_velocity = new_u_velocity + v_acceleration
+                new_v_velocity = new_u_velocity * self._effective_dt + v_acceleration
                 
             elif vel_solver == "neural_sph":
                 new_v_velocity = most_recent_v_velocity + v_acceleration
-                new_u_velocity = new_v_velocity + u_acceleration
-            
-            #Doesn't make sense to wrap the position and the displacements, because this is supposed to be accounted for by the model
-            # if pbc:
-            #     # Wrap new positions within boundaries
-            #     new_position = wrap_position(new_position, self._boundaries)
-            #     new_u_velocity = wrap_displacement(new_u_velocity, self._boundaries)
-            new_position = most_recent_position + new_v_velocity  # * dt = 1    
+                new_u_velocity = new_v_velocity / self._effective_dt + u_acceleration
+
+            new_position = self.shift_fn(most_recent_position, new_v_velocity)   
             
             return new_position, new_u_velocity
         
         else:
             new_v_velocity = most_recent_v_velocity + v_acceleration
-            new_position = wrap_position((most_recent_position + new_v_velocity), self._boundaries)   
+            new_position = self.shift_fn(most_recent_position, new_v_velocity)
             
         return new_position
 
@@ -523,15 +531,8 @@ class Simulator(nn.Module):
     def predict_accelerations(self, next_position, position_sequence_noise, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
         #next_position needs to drop dim=1 because the dataloader is configured for both training and validation, but for training this dim is not necessary.
         next_position = next_position.squeeze(1)
-        if pbc:
-            noisy_position_sequence = wrap_position(position_sequence + position_sequence_noise, self._boundaries)
-            next_position_adjusted = wrap_position(next_position + position_sequence_noise[:, -1], self._boundaries)
-        elif not pbc:
-            noisy_position_sequence = position_sequence + position_sequence_noise
-            next_position_adjusted = next_position + position_sequence_noise[:, -1]
-        else: 
-            raise ValueError("Invalid periodic boundary condition type.")
-        
+        noisy_position_sequence = self.shift_fn(position_sequence, position_sequence_noise)
+        next_position_adjusted = self.shift_fn(next_position, position_sequence_noise[:, -1])
         
         #Compute the target normalized acceleration
         if self._case == "KOLM":
@@ -539,9 +540,9 @@ class Simulator(nn.Module):
             next_u_velocity = kwargs["next_u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
-            a_v_target, a_u_target = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc, next_u_velocity=next_u_velocity, u_velocity=u_velocity)
+            a_v_target, a_u_target = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc, next_u_velocity=next_u_velocity, u_velocity=u_velocity, vel_solver=kwargs["vel_solver"])
             
-            return (a_u_pred, a_v_pred), (a_u_target, a_v_target)   
+            return (a_v_pred, a_u_pred), (a_v_target, a_u_target)   
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc)
             predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
@@ -554,27 +555,32 @@ class Simulator(nn.Module):
         """Inverse of `_decoder_postprocessor`, with PBC support."""
         # Handle PBC for position differences
         previous_position = position_sequence[:, -1]
-        if pbc:
-            previous_v_velocity = wrap_displacement(previous_position - position_sequence[:, -2], self._boundaries)
-            next_v_velocity = wrap_displacement(next_position - previous_position, self._boundaries)
-        elif not pbc:
-            previous_v_velocity = previous_position - position_sequence[:, -2]
-            next_v_velocity = next_position - previous_position
-        
-        # Compute acceleration
-        v_acceleration = next_v_velocity - previous_v_velocity
-        # Normalize acceleration (reverse normalization for loss calculation)
-        v_acceleration_stats = self.normalization_stats["v_acceleration"]  
-        v_normalized_acceleration = (v_acceleration - v_acceleration_stats['mean']) / v_acceleration_stats['std']
-        
+        previous_v_velocity = self.displ_fn(previous_position, position_sequence[:, -2])
+        next_v_velocity = self.displ_fn(next_position, previous_position)
+
         if self._case == "KOLM":
             next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
             previous_u_velocity = kwargs["u_velocity"][:, -1]
-            u_acceleration = next_u_velocity - previous_u_velocity
-            u_acceleration_stats = self.normalization_stats["u_acceleration"]   
-            u_normalized_acceleration = (u_acceleration - u_acceleration_stats['mean']) / u_acceleration_stats['std']
-            
+
+            vel_solver = kwargs["vel_solver"]
+            # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
+            if vel_solver == "simple":
+                u_acceleration = next_u_velocity - previous_u_velocity
+                v_acceleration = next_v_velocity - previous_v_velocity
+
+            elif vel_solver == "tvf":
+                u_acceleration = next_u_velocity - previous_u_velocity
+                v_acceleration = next_v_velocity - next_u_velocity * self._effective_dt
+                
+            elif vel_solver == "neural_sph":
+                v_acceleration = next_v_velocity - previous_v_velocity
+                u_acceleration = next_u_velocity - next_v_velocity / self._effective_dt
+
+            v_normalized_acceleration = self._norm(v_acceleration, "va")
+            u_normalized_acceleration = self._norm(u_acceleration, "ua")
             return v_normalized_acceleration, u_normalized_acceleration
         else:   
+            # Compute acceleration
+            v_acceleration = next_v_velocity - previous_v_velocity
+            v_normalized_acceleration = self._norm(v_acceleration, "va")
             return v_normalized_acceleration
-        
