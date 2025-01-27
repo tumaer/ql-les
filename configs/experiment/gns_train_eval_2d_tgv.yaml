@@ -6,6 +6,7 @@ defaults:
   - override /model: gns
   - override /data: 2d_tgv
   - override /trainer: gpu
+  - override /vars: tgv2d
   - override /callbacks: custom
   - override /logger: wandb
 
@@ -18,14 +19,14 @@ defaults:
 model:
   _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
   net:
-    node_in: 18
+    node_in: 26 # num_past_velocities * dim + particle_type_embedding_size
     edge_in: 3
     latent_dim: 128
-    node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
+    node_out: ${vars.dim} #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
     num_message_passing_steps: 10
-    particle_type_embedding_size: 8
+    particle_type_embedding_size: 16
     dataset_path: ${data.data_dir} # Path to the dataset
-    noise_std: 5.e-4 #Random-walk noise
+    noise_std: 3.e-4 #Random-walk noise
   pbc: true
   pushforward:
     steps: [-1, 200_000, 300_000, 400_000]   # Training steps unlocking stages
@@ -33,12 +34,11 @@ model:
       - 0
       - 1
       - 2
-      - ${data.max_pushforward_steps}
+      - ${vars.max_pushforward_steps}
     probs: [18, 2, 1, 1]       # Relative probabilities for each unroll step
   alpha_v: 1.0
   alpha_u: 0.0
   active_metrics: ["mse", "mae", "e_kin"]
-
 
 trainer:
   min_epochs: 0

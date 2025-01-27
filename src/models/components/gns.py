@@ -258,7 +258,7 @@ class Simulator(nn.Module):
         dataset_path,
         num_particle_types,
         particle_type_embedding_size,
-        device='cuda',
+        device,
     ):
         super(Simulator, self).__init__()
         self._num_particle_types = num_particle_types
@@ -455,14 +455,14 @@ class Simulator(nn.Module):
             a_v_pred * v_acceleration_stats['std']
         ) + v_acceleration_stats['mean'] 
         #Transform the v_acceleration to physical space
-        effective_dt = self.metadata["dt"] * self.metadata["write_every"]
-        v_acceleration /= effective_dt ** 2
+        # effective_dt = self.metadata["dt"] * self.metadata["write_every"]
+        # v_acceleration /= effective_dt ** 2
         
         most_recent_position = position_sequence[:, -1]
         most_recent_v_velocity = (most_recent_position - position_sequence[:, -2])
         if pbc:
             most_recent_v_velocity = wrap_displacement(most_recent_v_velocity, self._boundaries)
-            most_recent_v_velocity /= effective_dt
+            # most_recent_v_velocity /= effective_dt
         
         if self._case == "KOLM":
             vel_solver = kwargs["vel_solver"]

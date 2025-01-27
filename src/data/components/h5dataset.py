@@ -214,16 +214,16 @@ class H5Dataset(Dataset):
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load and transpose the trajectory
-        pos_input = torch.Tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
+        pos_input = torch.tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
         
-        particle_type = torch.Tensor( traj["particle_type"][:]).int()
+        particle_type = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
         
         position_dict = {"position": pos_input, "particle_type": particle_type}
         
         #if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = torch.Tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
+            u_input_and_target = torch.tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
             position_dict["u"] = u_input_and_target
         
         return position_dict
@@ -247,9 +247,9 @@ class H5Dataset(Dataset):
         traj_pos = traj["position"]
         # load only a slice of the positions. Now, this is an array in memory.
         pos_input_and_target = traj_pos[el_idx : el_idx + self.subseq_length]
-        pos_input_and_target = torch.Tensor(pos_input_and_target.transpose((1, 0, 2)))
+        pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))
 
-        particle_type = torch.Tensor(traj["particle_type"][:]).int()
+        particle_type = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
         
         position_dict = {"position": pos_input_and_target, "particle_type": particle_type}
         
@@ -257,7 +257,7 @@ class H5Dataset(Dataset):
         if "u" in traj:
             traj_u_vel = traj["u"]
             u_input_and_target = traj_u_vel[el_idx : el_idx + self.subseq_length]
-            u_input_and_target = torch.Tensor(u_input_and_target.transpose((1, 0, 2)))
+            u_input_and_target = torch.tensor(u_input_and_target.transpose((1, 0, 2)))
             position_dict["u"] = u_input_and_target
         
         return position_dict

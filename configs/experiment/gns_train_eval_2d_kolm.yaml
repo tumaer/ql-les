@@ -11,8 +11,6 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["kolm", "gns"]
-
 #for eval
 # ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
 
@@ -59,13 +57,11 @@ trainer:
   # val_check_interval: 10_000
   check_val_every_n_epoch: 1
 
+tags: ["kolm", "gns"]
+
 logger:
   wandb:
     project: "kolm2d"
-    tags: ${tags}
-    group: "gns"
-  aim:
-    experiment: "gns"
 
 seed: 12345
 

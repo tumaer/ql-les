@@ -6,6 +6,7 @@ _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path f
 net:
   # Specify the correct path to the GNS model implementation (Simulator) within the GNSLitModule
   _target_: src.models.components.gns.Simulator  # Adjust this to the actual path for your GNS simulator model
+  _partial_: true
   # particle_dimension: 2
   node_in: 26
   edge_in: 3
@@ -47,7 +48,7 @@ scheduler:
 compile: true
 
 # Adjust based on the available hardware
-device: ${trainer.accelerator}
+accelerator: ${trainer.accelerator}
 
 #By default, pushforward is disabled
 pushforward:
@@ -55,8 +56,7 @@ pushforward:
   unrolls: [0]
   probs: [1]
 
-num_rollout_steps: 20
-num_eval_steps: 10
+num_rollout_steps: ${vars.num_rollout_steps}
 
 #Periodic boundary conditions
 pbc: true

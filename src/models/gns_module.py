@@ -15,14 +15,13 @@ class GNSLitModule(LightningModule):
     def __init__(
         self,
         net: torch.nn.Module,
-        device: torch.device,
+        accelerator: torch.device,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
         compile: bool = False,
         seed: int = 0,
         pushforward: Dict[str, Any] = None,
         num_rollout_steps: int = 1,
-        num_eval_steps: int = 1,
         pbc: bool = True,
         vel_solver: str = "simple",
         alpha_u: float = 1.0,
@@ -40,7 +39,7 @@ class GNSLitModule(LightningModule):
         # Save hyperparameters and initialize the network
         # For model checkpointing
         self.save_hyperparameters(logger=False, ignore=['net'])
-        self.net = net
+        self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.pbc = pbc
         
         # Loss weights
@@ -58,7 +57,6 @@ class GNSLitModule(LightningModule):
         
         # Number of eval steps
         self.num_rollout_steps = num_rollout_steps
-        self.num_eval_steps = num_eval_steps
         self.vel_solver = vel_solver
         self.active_metrics = active_metrics
         
@@ -168,7 +166,7 @@ class GNSLitModule(LightningModule):
         # Evaluate the model on the training batch and calculate the loss
         loss = self.model_step(batch)
         # Log metrics
-        self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size)   
+        self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
         return loss 
     
     def validation_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
@@ -186,21 +184,11 @@ class GNSLitModule(LightningModule):
                                 u_vel=False)
             #TODO: make this more general (for-loops mess up the automatic calculations from the logger across trajectories)
             #MSE
+            for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
+                self.log(f"val/{k}", loss[k].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+                self.log(f"val/{k}std", loss[k].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+
             self.log("val/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/mse1", loss["mse1"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/mse5", loss["mse5"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/mse10", loss["mse10"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/mse20", loss["mse20"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/mse50", loss["mse50"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/mse100", loss["mse100"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            
-            self.log("val/msestd", loss["mse"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/msestd1", loss["mse1"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/msestd5", loss["mse5"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/msestd10", loss["mse10"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/msestd20", loss["mse20"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/msestd50", loss["mse50"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            # self.log("val/msestd100", loss["mse100"].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
             
             #MAE
             
@@ -258,7 +246,6 @@ class GNSLitModule(LightningModule):
     
     def on_train_epoch_start(self):
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
-        print(f"Current epoch learning rate: {lr}") 
         return lr
         
     def on_test_start(self) -> None:

@@ -12,8 +12,6 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["eval", "tgv", "gns"]
-
 #for eval: Replace with the path to the exact checkpoint file
 ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt 
 
@@ -25,8 +23,7 @@ data:
 model:
   net:
     dataset_path: ${data.data_dir} # Path to the dataset
-    connectivity_radius: 0.029  #Default value for 2D TGV dataset(derived from metadata), can be adjusted
-  noise_std: 3e-4
+    noise_std: 3.e-4
   pbc: true
   pushforward:
     steps: [0, 500, 700]   # Training steps unlocking stages
@@ -43,11 +40,10 @@ trainer:
   gradient_clip_val: 0.5
   accelerator: "gpu"
 
+tags: ["eval", "tgv", "gns"]
+
 logger:
   wandb:
-    tags: ${tags}
-    group: "gns"
-  aim:
-    experiment: "gns"
+    project: "tgv2d"
 
 seed: 12345

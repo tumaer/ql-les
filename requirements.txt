@@ -36,3 +36,4 @@ pytest          # tests
 # --------- LagrangeBench --------- #
 h5py
 wget
+matplotlib
