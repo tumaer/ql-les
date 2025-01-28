@@ -143,6 +143,7 @@ dmypy.json
 *.h5
 *.tar
 *.tar.gz
+/logs/rollouts/
 
 # Lightning-Hydra-Template
 configs/local/default.yaml
@@ -152,7 +153,6 @@ configs/local/default.yaml
 
 # Aim logging
 .aim
-
 
 # Beyond the template
 *.DS_Store

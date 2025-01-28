@@ -1,7 +1,8 @@
 import torch
-import numpy as np
-from collections import defaultdict
-from typing import List, Dict, Optional
+import pickle
+import os
+from typing import List, Dict, Optional, Union
+from src.utils.eval_utils import write_vtk
 
 def push_forward_sample_steps(seed, step, pushforward):
     """
@@ -41,7 +42,18 @@ def push_forward_sample_steps(seed, step, pushforward):
     return updated_seed, unroll_steps[unroll_steps_idx].item()
 
 def integrate(normalized_acceleration, position_sequence, normalization_stats, boundaries, pbc=True):
-    """The model produces the output in normalized space so we apply inverse normalization."""
+    """
+    The model produces the output in normalized space so we apply inverse normalization.
+
+    Args:
+        normalized_acceleration: Normalized acceleration tensor.
+        position_sequence: Sequence of positions tensor.
+        normalization_stats: Dictionary containing 'mean' and 'std' for normalization.
+        boundaries: Tensor containing boundary conditions.
+
+    Returns:
+        Tensor of new positions after integration.
+    """
     # Inverse normalize the acceleration
     acceleration = (
         normalized_acceleration * normalization_stats['std']
@@ -62,15 +74,44 @@ def integrate(normalized_acceleration, position_sequence, normalization_stats, b
     return new_position
 
 def wrap_displacement(displacement, boundaries):
-    """Wrap displacement to account for periodic boundary conditions."""
+    """
+    Wrap displacement to account for periodic boundary conditions.
+
+    Args:
+        displacement: Displacement tensor.
+        boundaries: Tensor containing boundary conditions.
+
+    Returns:
+        Wrapped displacement tensor.
+    """
     #floating point percision messes up the results
     return (displacement + 0.5 * boundaries) % boundaries - 0.5 * boundaries
 
 def wrap_position(position, boundaries):
-    """Wrap position to account for periodic boundary conditions."""
+    """
+    Wrap position to account for periodic boundary conditions.
+
+    Args:
+        position: Position tensor.
+        boundaries: Tensor containing boundary conditions.
+
+    Returns:
+        Wrapped position tensor.
+    """
     return position % boundaries
 
 def particle_mse(pred, target, non_kinematic_mask):
+    """
+    Compute the mean squared error for particles.
+
+    Args:
+        pred: Predicted positions tensor.
+        target: Target positions tensor.
+        non_kinematic_mask: Mask tensor indicating non-kinematic particles.
+
+    Returns:
+        Mean squared error for non-kinematic particles.
+    """
     loss = (pred - target) ** 2
     loss = loss.sum(dim=-1)
     num_non_kinematic = non_kinematic_mask.sum()
@@ -78,7 +119,17 @@ def particle_mse(pred, target, non_kinematic_mask):
     loss = loss.sum() / num_non_kinematic
     return loss
 
-def eval_rollout(batch, simulator, metadata, num_rollout_steps, device, active_metrics, pbc=True, u_vel=False, **kwargs):
+def eval_rollout(batch,
+                 simulator,
+                 metadata,
+                 num_rollout_steps,
+                 device, 
+                 active_metrics,
+                 pbc=True, 
+                 u_vel=False, 
+                 vis_config=None,
+                 trajectory_idx=0, 
+                 **kwargs):
     """
     Evaluate rollout by computing the mean squared error over trajectories.
 
@@ -88,7 +139,10 @@ def eval_rollout(batch, simulator, metadata, num_rollout_steps, device, active_m
         metadata: Dictionary containing metadata (e.g., boundaries).
         num_rollout_steps: Number of rollout steps to evaluate.
         device: Device to perform computations on.
+        active_metrics: List of active metrics to compute.
         pbc: Whether to use periodic boundary conditions.
+        u_vel: Whether to use velocity updates.
+        out_type: Output type for saving results (e.g., 'vtk').
 
     Returns:
         Mean squared error metrics from the rollout evaluation.
@@ -112,7 +166,62 @@ def eval_rollout(batch, simulator, metadata, num_rollout_steps, device, active_m
                 "vel_solver": kwargs["vel_solver"]
             })
 
-        computed_metrics = eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel)
+        computed_metrics, trajectory_rollout, ground_truth_positions = eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel)
+        
+    out_type = vis_config.get("out_type", None)
+    rollout_dir = vis_config.get("rollout_dir", None)
+    
+    if rollout_dir is not None:
+        os.makedirs(rollout_dir, exist_ok=True)
+        
+        batch_idx = trajectory_idx
+        
+        # Prepare the input positions for the rollout
+        # (batch_size*nodes, t, dim) -> (t, batch_size*nodes, dim)
+        pos_input_batch = batch.enc_pos.permute(1, 0, 2)
+
+        batch_offset = 0  # Keeps track of the starting index for each trajectory
+        for j in range(batch.batch_size):  # Write every trajectory to file (batch loop)
+            num_particles = batch.n_particles_per_trajectory[j]  # Get the number of particles for this trajectory
+
+            # Slice the pos_input_batch for the current trajectory
+            pos_input = pos_input_batch[:, batch_offset:batch_offset + num_particles]  # Shape: (t, nodes, dim)
+            example_rollout = trajectory_rollout[:, batch_offset:batch_offset + num_particles]  # Shape: (extrap, nodes, dim)
+            
+            # Prepare initial positions and the full sequence
+            initial_positions = pos_input  # Shape: (t_window, nodes, dim)
+            example_full = torch.concatenate([initial_positions, example_rollout], axis=0)  # Shape: (t_window + extrap, nodes, dim)
+
+            # Collect the ground truth rollout:
+            ground_truth_rollout = torch.concat([pos_input, ground_truth_positions[:, batch_offset:batch_offset + num_particles]], axis=0)  # Shape: (t, nodes, dim)
+            
+            example_rollout_dict = {
+                    "predicted_rollout": example_full.cpu().numpy(),  # Convert to NumPy
+                    "ground_truth_rollout": ground_truth_rollout.cpu().numpy(),  # Convert to NumPy
+                    "particle_type": batch.particle_type[batch_offset:batch_offset + num_particles].cpu().numpy(),  # Convert to NumPy
+                }
+            batch_offset += num_particles
+            # File handling
+            file_prefix = os.path.join(rollout_dir, f"rollout_{batch_idx * batch.batch_size + j}")
+            if out_type == "vtk":  # Write vtk files for each time step
+                for k in range(example_full.shape[0]):
+                    # Predictions
+                    state_vtk = {
+                        "r": example_rollout_dict["predicted_rollout"][k],
+                        "tag": example_rollout_dict["particle_type"],
+                    }
+                    write_vtk(state_vtk, f"{file_prefix}_{k}.vtk")
+                for k in range(ground_truth_rollout.shape[0]):
+                    # Ground truth reference
+                    ref_state_vtk = {
+                        "r": example_rollout_dict["ground_truth_rollout"][k],
+                        "tag": example_rollout_dict["particle_type"],
+                    }
+                    write_vtk(ref_state_vtk, f"{file_prefix}_ref_{k}.vtk")
+            elif out_type == "pkl":
+                filename = f"{file_prefix}.pkl"
+                with open(filename, "wb") as f:
+                    pickle.dump(example_rollout_dict, f)
 
     simulator.train()
     return computed_metrics
@@ -127,6 +236,9 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
         features: Dictionary containing input features.
         num_rollout_steps: Number of rollout steps to evaluate.
         pbc: Whether to use periodic boundary conditions.
+        metadata: Dictionary containing metadata (e.g., boundaries).
+        active_metrics: List of active metrics to compute.
+        u_vel: Whether to use velocity updates.
 
     Returns:
         Dictionary containing predicted and ground truth losses.
@@ -154,9 +266,11 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
         
+        trajectory_rollout = position_predictions
+        
         computed_metrics = comupte_metrics(position_predictions, ground_truth_positions, metadata, active_metrics, features["bounds"], pbc=pbc)
                 
-        return computed_metrics
+        return computed_metrics, trajectory_rollout, ground_truth_positions
     else:   
         current_u_velocity = features["u_velocity"] #initial u_velocity
         ground_truth_u_velocity = features["next_u_velocity"]
@@ -189,7 +303,7 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
         computed_position_metrics = comupte_metrics(position_predictions, ground_truth_positions, metadata, active_metrics, features["bounds"], pbc=pbc, u_vel=True)
         #TODO: discuss metrics for u_vel
         computed_vel_metrics = ((u_vel_predictions - ground_truth_u_velocity) ** 2).mean(dim=(1, 2))
-        return (computed_position_metrics, computed_vel_metrics)
+        return (computed_position_metrics, computed_vel_metrics), trajectory_rollout, ground_truth_positions
 
 def comupte_metrics(predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False):
     """
@@ -200,7 +314,9 @@ def comupte_metrics(predictions, targets, metadata, active_metrics, boundaries, 
         targets: Ground truth positions or velocities.
         metadata: Dictionary containing metadata (e.g., dx).
         active_metrics: List of active metrics to compute.
+        boundaries: Tensor containing boundary conditions.
         pbc: Whether to use periodic boundary conditions.
+        u_vel: Whether to use velocity updates.
 
     Returns:
         Dictionary containing computed metrics.
@@ -233,9 +349,21 @@ def compute_kinetic_energy(
     metadata: Dict,
     stride: int = 1,
 ) -> Dict[str, torch.Tensor]:
-    """Compute Kinetic Energy with periodic boundary conditions."""
+    """
+    Compute Kinetic Energy with periodic boundary conditions.
+
+    Args:
+        predictions: Predicted positions tensor.
+        targets: Ground truth positions tensor.
+        boundaries: Tensor containing boundary conditions.
+        metadata: Dictionary containing metadata (e.g., dt, dx, dim).
+        stride: Stride for computing velocities.
+
+    Returns:
+        Mean squared error of kinetic energy.
+    """
     # Extract metadata values
-    dt = metadata["dt"] * metadata["write_every"]  # Time step
+    dt = metadata["dt"] # Time step
     dx = metadata["dx"]                            # Spatial resolution
     dim = metadata["dim"]                          # Number of spatial dimensions
     

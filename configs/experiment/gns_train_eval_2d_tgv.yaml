@@ -36,6 +36,14 @@ model:
   alpha_v: 1.0
   alpha_u: 0.0
   active_metrics: ["mse", "mae", "e_kin"]
+  visualize: 
+    vis_infer: 
+      out_type: "pkl"
+      rollout_dir: "${paths.log_dir}/rollouts/2d_tgv_28_01_2025/test/" #TODO: Interpolate wandb ID!!!!!
+    vis_eval:
+      out_type: "pkl"
+      rollout_dir: "${paths.log_dir}/rollouts/2d_tgv_28_01_2025/eval/"
+
 
 trainer:
   min_epochs: 0

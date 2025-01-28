@@ -1,4 +1,5 @@
 import os
+import copy
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing, radius_graph
@@ -6,6 +7,7 @@ from src.utils.train_utils import wrap_displacement, wrap_position
 from src.utils.neighbor_search_algorithms import compute_connectivity_pbc #Alternative to radius_graph
 from src.utils.data_utils import load_metadata
 from pathlib import Path
+
 
 # from torch.utils.tensorboard import SummaryWriter
 os.makedirs('train_log', exist_ok=True)
@@ -39,7 +41,7 @@ def time_diff(input_sequence, boundaries, pbc=True):
         return input_sequence[:, 1:] - input_sequence[:, :-1]
 
 
-def pbc_duplication(most_recent_positions, domain_size):
+def pbc_duplication(most_recent_positions, n_particles_per_trajectory_combined, domain_size):
     """
     Apply periodic boundary condition duplication based on the specified PBC list.
 
@@ -55,8 +57,11 @@ def pbc_duplication(most_recent_positions, domain_size):
     D = most_recent_positions.size(1)  # Number of spatial dimensions
     if D == 2:
         pbc = [True, True]
+        n_particles_per_trajectory_combined *= 9
+
     elif D == 3:
         pbc = [True, True, True]
+        n_particles_per_trajectory_combined *= 27
 
     # Create shifts based on pbc
     shift_ranges = [
@@ -75,7 +80,7 @@ def pbc_duplication(most_recent_positions, domain_size):
 
     # Combine original frame and duplicated frames
     combined_positions = torch.cat([most_recent_positions, duplicated_frames], dim=0).to(most_recent_positions.device)
-    return combined_positions
+    return combined_positions, n_particles_per_trajectory_combined
 
 def get_random_walk_noise_for_position_sequence(position_sequence, noise_std_last_step, boundaries, pbc=True):
     """Returns random-walk noise in the velocity applied to the position."""
@@ -444,10 +449,10 @@ class Simulator(nn.Module):
     def _compute_connecitivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
          #Default is 2 examples per batch
          # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
-        combined_positions = pbc_duplication(most_recent_position, self._boundaries)
-        n_particles_per_trajectory = torch.tensor([combined_positions.shape[0]], requires_grad=False).to(self._device)
-        batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory)]).to(self._device)
-        edge_index = radius_graph(x=combined_positions, r=radius, batch=batch_ids, loop=add_self_edges) # (2, n_edges)
+        n_particles_copy = copy.deepcopy(n_particles_per_trajectory)
+        combined_positions, n_particles_per_trajectory_combined = pbc_duplication(most_recent_position, n_particles_copy, self._boundaries)
+        batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory_combined)]).to(self._device)
+        edge_index = radius_graph(x=combined_positions, r=radius, batch=batch_ids, loop=add_self_edges)# (2, n_edges)
         # Filter edges to only keep those where the source is in the original frame
         original_frame_size = most_recent_position.size(0)
         is_from_original = edge_index[0] < original_frame_size #Mask all particles not from the original frame

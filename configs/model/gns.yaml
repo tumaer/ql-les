@@ -60,3 +60,8 @@ num_rollout_steps: ${vars.num_rollout_steps}
 
 #Periodic boundary conditions
 pbc: true
+
+visualize:
+  vis_infer: ${vars.vis_infer}
+  vis_eval: ${vars.vis_eval}
+

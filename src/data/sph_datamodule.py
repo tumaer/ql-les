@@ -10,7 +10,7 @@ class SPHDataModule(LightningDataModule):
     def __init__(
         self,
         data_dir: str = "data/2D_TGV_2500_10kevery100",
-        batch_size: int = 32,
+        batch_size: int = 1,
         input_seq_length: int = 6,
         max_pushforward_steps: int = 0,
         max_rollout_steps: int = 0,
