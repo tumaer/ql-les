@@ -13,7 +13,7 @@ net:
   latent_dim: 128
   node_out: 2 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
   num_message_passing_steps: 10
-  mlp_num_layers: 2
+  mlp_num_layers: 1
   mlp_hidden_dim: 128
   noise_std: 6.7e-4 
   num_particle_types: 9
