@@ -192,7 +192,7 @@ class GNSLitModule(LightningModule):
                                 device=self.net._device,
                                 active_metrics=self.active_metrics,
                                 u_vel=False,
-                                vis_config=self.visualize["vis_eval"],
+                                vis_config=self.visualize["vis_val"],
                                 trajectory_idx=self.trajectory_idx)
 
             #MSE
@@ -216,7 +216,7 @@ class GNSLitModule(LightningModule):
                                                         device=self.net._device,
                                                         active_metrics=self.active_metrics,
                                                         u_vel=True,
-                                                        vis_config=self.visualize["vis_eval"],
+                                                        vis_config=self.visualize["vis_val"],
                                                         trajectory_idx=self.trajectory_idx)
             
             self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
@@ -227,7 +227,7 @@ class GNSLitModule(LightningModule):
         self.trajectory_idx += 1
         
     def on_test_epoch_start(self):
-        self.trajectory_idx += 1
+        self.trajectory_idx = 0
 
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
@@ -241,7 +241,7 @@ class GNSLitModule(LightningModule):
                                 device=self.net._device,
                                 active_metrics=self.active_metrics,
                                 u_vel=False,
-                                vis_config=self.visualize["vis_infer"],
+                                vis_config=self.visualize["vis_test"],
                                 trajectory_idx=self.trajectory_idx)
             self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
         else:
@@ -254,7 +254,7 @@ class GNSLitModule(LightningModule):
                                                         device=self.net._device,
                                                         active_metrics=self.active_metrics,
                                                         u_vel=True,
-                                                        vis_config=self.visualize["vis_infer"],
+                                                        vis_config=self.visualize["vis_test"],
                                                         trajectory_idx=self.trajectory_idx)
                 
             self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)

@@ -1,14 +1,3 @@
 dim: 2
 num_rollout_steps: 20
 input_seq_length: 6
-
-vis_infer:
-  out_type: "pkl" # "none", "vtk", "pkl"
-  #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
-  rollout_dir: "${paths.log_dir}/rollouts/2d_kolm_28_01_2025/test/"
-
-vis_eval:
-  out_type: "none" # "none", "vtk", "pkl"
-  #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
-  rollout_dir: null 
-

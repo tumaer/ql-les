@@ -62,6 +62,11 @@ num_rollout_steps: ${vars.num_rollout_steps}
 pbc: true
 
 visualize:
-  vis_infer: ${vars.vis_infer}
-  vis_eval: ${vars.vis_eval}
-
+  vis_test:
+    out_type: "none" # "none", "vtk", "pkl"
+    #path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025/test"
+    rollout_dir: null
+  vis_val:
+    out_type: "none" # "none", "vtk", "pkl"
+    #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
+    rollout_dir: null 
