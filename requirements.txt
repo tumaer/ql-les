@@ -37,3 +37,6 @@ pytest          # tests
 h5py
 wget
 matplotlib
+pickle-mixin
+pyvista
+ipython

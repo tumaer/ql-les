@@ -34,6 +34,17 @@ model:
   alpha_v: 1.0
   active_metrics: ["mse", "e_kin"]
 
+  visualize:
+    vis_infer:
+      out_type: "pkl" # "none", "vtk", "pkl"
+      #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
+      rollout_dir: "${paths.log_dir}/rollouts/2d_kolm_28_01_2025/test/" #TODO: Interpolate wandb ID!!!!!
+    vis_eval:
+      out_type: "pkl" # "none", "vtk", "pkl"
+      #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
+      rollout_dir: "${paths.log_dir}/rollouts/2d_kolm_28_01_2025/eval/" #TODO: Interpolate wandb ID!!!!!
+
+
 trainer:
   min_epochs: 0
   max_epochs: 26  # on 2D KOLM with 19950 samples, this means 518k steps
