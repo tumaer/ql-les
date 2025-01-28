@@ -37,6 +37,8 @@ from src.utils import (
     task_wrapper,
 )
 
+from src.utils.eval_utils import update_wandb_id
+
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
@@ -57,15 +59,17 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
-
-    log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
-
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
-    log.info("Instantiating loggers...")
+    log.info(f"Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
+    
+    #Replace the wandb id in the config file
+    update_wandb_id(cfg, logger)
+
+    log.info(f"Instantiating model <{cfg.model._target_}>")
+    model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
@@ -78,10 +82,6 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "logger": logger,
         "trainer": trainer,
     }
-
-    if logger:
-        log.info("Logging hyperparameters!")
-        log_hyperparameters(object_dict)
 
     if cfg.get("train"):
         log.info("Starting training!")

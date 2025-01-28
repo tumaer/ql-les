@@ -39,7 +39,7 @@ model:
   visualize: 
     vis_test: 
       out_type: "none"
-      rollout_dir: "${paths.log_dir}/rollouts" #TODO: Interpolate wandb ID!!!!!
+      rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
 
 trainer:
   min_epochs: 0
@@ -48,6 +48,7 @@ trainer:
   num_sanity_val_steps: 1 # before training starts
   log_every_n_steps: 1000  # TODO: increse to 1000
   limit_val_batches: 20  # evaluate this number of (sub-)trajectories
+  # limit_train_batches: 100  # evaluate this number of (sub-)trajectories
   # # the next two arguments run validation every N training steps, and should be used 
   # # with model_checkpoint: every_n_train_steps: 10_000
   # check_val_every_n_epoch: null

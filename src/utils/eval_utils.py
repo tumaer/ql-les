@@ -3,6 +3,11 @@ import os
 import pickle
 import numpy as np
 
+from omegaconf import DictConfig
+from lightning.pytorch.loggers import WandbLogger, Logger
+from typing import List
+
+
 def write_vtk(data_dict, path):
     """Store a .vtk file for ParaView."""
 
@@ -70,3 +75,25 @@ def pkl2vtk(src_path, dst_path=None):
             "tag": rollout["particle_type"],
         }
         write_vtk(state_vtk, f"{file_prefix}_ref_{k}.vtk")
+        
+def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:
+    """
+    Retrieves the WandB run ID from the logger and updates the config paths with it.
+
+    Args:
+        cfg (DictConfig): The Hydra configuration to update.
+        logger (List[Logger]): List of loggers to extract the WandB run ID.
+    """
+
+    # Retrieve the WandB run ID from the logger
+    wandb_run_id = None
+    for x_logger in logger:
+        if isinstance(x_logger, WandbLogger):
+            wandb_run_id = x_logger.experiment.id  # Access WandB run ID
+
+    # Update the config paths if a WandB run ID is available
+    if wandb_run_id:
+        if cfg.model.visualize.vis_test.rollout_dir:
+            cfg.model.visualize.vis_test.rollout_dir = cfg.model.visualize.vis_test.rollout_dir.replace("wandb_id", wandb_run_id)
+        if cfg.model.visualize.vis_val.rollout_dir:
+            cfg.model.visualize.vis_val.rollout_dir = cfg.model.visualize.vis_val.rollout_dir.replace("wandb_id", wandb_run_id)

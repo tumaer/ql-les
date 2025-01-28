@@ -33,6 +33,8 @@ from src.utils import (
     task_wrapper,
 )
 
+from src.utils.eval_utils import update_wandb_id
+
 log = RankedLogger(__name__, rank_zero_only=True)
 
 
@@ -51,9 +53,15 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
+    log.info("Instantiating loggers...")
+    logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
+
+    #Replace the wandb id in the config file
+    update_wandb_id(cfg, logger)
+    
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
-
+    
     checkpoint = torch.load(cfg.ckpt_path, map_location= "cuda" if torch.cuda.is_available() else "cpu")
     #Compiled models are saved with the prefix "net._orig_mod." in the state_dict keys
     updated_state_dict = {
@@ -62,10 +70,7 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
       
     model.load_state_dict(updated_state_dict, strict=False)
     log.info(f"Loaded checkpoint from {cfg.ckpt_path}")
-
-    log.info("Instantiating loggers...")
-    logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
-
+    
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger)
 
