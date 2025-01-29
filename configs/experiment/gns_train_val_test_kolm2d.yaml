@@ -1,10 +1,10 @@
 # @package _global_
 
 # to execute this experiment run:
-# python train.py experiment=gns_experiment
+# python train.py experiment=gns_train_val_test_kolm2d
 defaults:
   - override /model: gns
-  - override /data: 2d_kolm
+  - override /data: kolm2d
   - override /trainer: gpu
   - override /vars: kolm2d
   - override /callbacks: custom
@@ -34,11 +34,10 @@ model:
   alpha_v: 1.0
   active_metrics: ["mse", "e_kin"]
 
-  visualize:
-    vis_test:
-      out_type: "pkl" # "none", "vtk", "pkl"
-      #specify the path to save the rollouts: e.g. "${paths.log_dir}/rollouts/2d_tgv_28_01_2025"
-      rollout_dir: "${paths.log_dir}/rollouts" #TODO: Interpolate wandb ID!!!!!
+  visualize: 
+    vis_test: 
+      out_type: "none"
+      rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
 
 trainer:
   min_epochs: 0

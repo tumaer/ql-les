@@ -1,0 +1,7 @@
+_target_: src.data.tgv_datamodule.SPHDataModule
+data_dir: ${paths.data_dir}/3D_TGV_8000_10kevery100
+batch_size: 1
+num_workers: 0
+input_seq_length: ${vars.input_seq_length}
+max_pushforward_steps: ${vars.max_pushforward_steps}
+max_rollout_steps: ${vars.num_rollout_steps}

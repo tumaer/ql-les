@@ -6,8 +6,8 @@ import torch
 from numpy import array
 from scipy.spatial import KDTree
 from jax.scipy.special import factorial
-import src.utils.jax_utils.jax_md_space as jax_md_space
-from src.utils.jax_utils.jax_sph_kernel import QuinticKernel
+import jax_utils.jax_md_space as jax_md_space
+from jax_utils.jax_sph_kernel import QuinticKernel
 
 EPS = jnp.finfo(float).eps
 

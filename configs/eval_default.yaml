@@ -9,9 +9,11 @@ defaults:
   - trainer: default
   - paths: default
   - extras: default
-  - hydra: default
-  - experiment: null
   - vars: default
+  - experiment: null
+  - hydra: default
+  
+  
 
 task_name: "eval"
 

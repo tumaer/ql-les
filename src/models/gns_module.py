@@ -205,7 +205,7 @@ class GNSLitModule(LightningModule):
             #MAE
             
             #E_KIN
-            self.log("val/loss_ekin", loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)            
+            self.log("val/loss_ekin", loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)            
         else:
             position_loss, u_vel_loss = eval_rollout(batch=batch,
                                                         simulator=self.net,
@@ -222,7 +222,7 @@ class GNSLitModule(LightningModule):
             self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
             self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
             self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("val/loss_ekin", position_loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+            self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
 
         self.trajectory_idx += 1
         

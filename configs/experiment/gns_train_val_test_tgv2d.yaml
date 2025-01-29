@@ -1,22 +1,20 @@
 # @package _global_
 
 # to execute this experiment run:
-# python eval.py experiment=gns_eval_2d_tgv
-#It is important to note that the ckpt_path should be replaced with the path to the exact checkpoint file!
+# python train.py experiment=gns_experiment
 defaults:
   - override /model: gns
-  - override /data: 2d_tgv
+  - override /data: tgv2d
   - override /trainer: gpu
   - override /vars: tgv2d
   - override /callbacks: custom
   - override /logger: wandb
 
-
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-#for eval: Replace with the path to the exact checkpoint file
-ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt 
+#for eval
+# ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
 
 model:
   _target_: src.models.gns_module.GNSLitModule  # Adjust this to the actual path for your GNS Lightning module
@@ -38,10 +36,23 @@ model:
   alpha_v: 1.0
   alpha_u: 0.0
   active_metrics: ["mse", "mae", "e_kin"]
+  visualize: 
+    vis_test: 
+      out_type: "none"
+      rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
 
 trainer:
   min_epochs: 0
   max_epochs: 42  # on 2D TGV with 12000 samples, this means 504k steps
+  # gradient_clip_val: 0.5
+  num_sanity_val_steps: 1 # before training starts
+  log_every_n_steps: 1000  # TODO: increse to 1000
+  limit_val_batches: 20  # evaluate this number of (sub-)trajectories
+  # limit_train_batches: 500  # evaluate this number of (sub-)trajectories
+  # # the next two arguments run validation every N training steps, and should be used 
+  # # with model_checkpoint: every_n_train_steps: 10_000
+  # check_val_every_n_epoch: null
+  # val_check_interval: 10_000
   check_val_every_n_epoch: 1
 
 tags: ["tgv", "gns"]

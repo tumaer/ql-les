@@ -1,7 +1,0 @@
-_target_: src.data.tgv_datamodule.TGVDataModule
-data_dir: ${paths.data_dir}/3D_TGV_8000_10kevery100
-batch_size: 1
-num_workers: 4
-input_seq_length: 6
-max_pushforward_steps: 5
-max_rollout_steps: 20

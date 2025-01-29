@@ -300,6 +300,8 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
         ground_truth_u_velocity = ground_truth_u_velocity.permute(1, 0, 2)
 
+        trajectory_rollout = position_predictions
+    
         computed_position_metrics = comupte_metrics(position_predictions, ground_truth_positions, metadata, active_metrics, features["bounds"], pbc=pbc, u_vel=True)
         #TODO: discuss metrics for u_vel
         computed_vel_metrics = ((u_vel_predictions - ground_truth_u_velocity) ** 2).mean(dim=(1, 2))
@@ -363,7 +365,7 @@ def compute_kinetic_energy(
         Mean squared error of kinetic energy.
     """
     # Extract metadata values
-    dt = metadata["dt"] # Time step
+    dt = metadata["dt"] * metadata["write_every"]# Time step
     dx = metadata["dx"]                            # Spatial resolution
     dim = metadata["dim"]                          # Number of spatial dimensions
     
@@ -388,11 +390,10 @@ def compute_kinetic_energy(
 
     # Mean squared error
     mse = ((e_kin_pred - e_kin_target) ** 2).mean()
-    return mse
-    #TODO: check which metrics are more informative
-    # return {
-    #     "predicted": e_kin_pred_mean,
-    #     "target": e_kin_target_mean,
-    #     "mse": mse,
-    # }
+    
+    return {
+        "predicted": e_kin_pred_mean,
+        "target": e_kin_target_mean,
+        "mse": mse,
+    }
 

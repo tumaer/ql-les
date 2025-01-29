@@ -4,9 +4,11 @@
 # python train.py experiment=gns_experiment
 defaults:
   - override /model: gns
-  - override /data: 3d_tgv
-  - override /trainer: default
+  - override /data: tgv3d
+  - override /trainer: gpu
+  - override /vars: tgv3d
   - override /callbacks: custom
+  - override /logger: wandb
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
