@@ -1,0 +1,371 @@
+import h5py
+import numpy as np
+import jax.numpy as jnp
+from jax import Array, ops, vmap
+import torch
+from numpy import array
+from scipy.spatial import KDTree
+from jax.scipy.special import factorial
+import src.utils.jax_utils.jax_md_space as jax_md_space
+from src.utils.jax_utils.jax_sph_kernel import QuinticKernel
+
+EPS = jnp.finfo(float).eps
+
+
+def read_h5(file_name: str, array_type: str = "jax"):
+    """Read an .h5 file and return a dict of numpy or jax arrays."""
+    hf = h5py.File(file_name, "r")
+
+    data_dict = {}
+    for k, v in hf.items():
+        if array_type == "jax":
+            data_dict[k] = jnp.array(v)
+        elif array_type == "numpy":
+            data_dict[k] = np.array(v)
+        else:
+            raise ValueError('array_type must be either "jax" or "numpy"')
+
+    hf.close()
+
+    return data_dict
+
+def pos_init_cartesian_2d(box_size: array, dx: float):
+    """Create a grid of particles in 2D.
+
+    Particles are at the center of the corresponding Cartesian grid cells.
+    Example: if box_size=np.array([1, 1]) and dx=0.1, then the first particle will be at
+    position [0.05, 0.05].
+    """
+    n = np.array((box_size / dx).round(), dtype=int)
+    grid = np.meshgrid(range(n[0]), range(n[1]), indexing="xy")
+    r = (jnp.vstack(list(map(jnp.ravel, grid))).T + 0.5) * dx
+    return r
+
+
+
+def mls_2nd_order(
+    r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_factor=None
+):
+    """2nd-order moving least squares interpolation for periodic flows in a
+    rectangular box.
+
+    Based on, "Analysis of interpolation schemes for the accurate estimation of
+    energy spectrum in Lagrangian methods", Shi et al., 2013
+
+    Args:
+        r (np.ndarray): coordinates of N particles of shape (N, dim)
+        r_target (np.ndarray): coordinates of target particles of shape (N, dim)
+        f (np.ndarray): scalar field, e.g. velocity of shape (N, 1)
+        box_size (np.ndarray): Domain box, e.g. np.array([1., 2., 3.])
+        dx (float): average particle spacing
+        dim (int): dimension of the vector field
+
+    Returns:
+        (np.ndarray): interpolated values of f on r_target
+    """
+
+    # define kernel function
+    if kernel_name == "M4Prime":
+        h_factor = 0.85 if h_factor is None else h_factor
+        kernel_fn = M4PrimeKernel(h=h_factor * dx, dim=dim)
+    elif kernel_name == "Quintic":
+        h_factor = 2/3 if h_factor is None else h_factor
+        kernel_fn = QuinticKernel(h=h_factor * dx, dim=dim)
+    else:
+        raise NotImplementedError(f"Kernel {kernel_name} not implemented.")
+
+    # displacement function for neighbors list
+    displacement_fn, shift_fn = jax_md_space.periodic(side=box_size)
+
+    # number of target particles
+    n_target = jnp.shape(r_target)[0]
+
+    # enforce periodic boundary conditions
+    r_pbc, f_pbc = pbc_copy_scalar(r, f, box_size, kernel_fn.cutoff, dim)
+
+    # compute edge list
+    tree = KDTree(r_pbc)
+    senders = tree.query_ball_point(r_target, kernel_fn.cutoff, p=np.inf)
+    i_s = np.repeat(range(n_target), [len(x) for x in senders])
+    j_s = np.concatenate(senders, axis=0)
+
+    # precompute quantities
+    r_ji = vmap(displacement_fn)(r_pbc[j_s], r_target[i_s])
+    if kernel_name == "M4Prime":
+        w_dist = vmap(kernel_fn.w)(r_ji)
+    elif kernel_name == "Quintic":
+        rel_distances = np.linalg.norm(r_ji, axis=1, ord=2)
+        w_dist = kernel_fn.w(rel_distances)
+    else:
+        raise NotImplementedError(f"Kernel {kernel_name} not implemented.")
+
+    # define size of the linear system of equations
+    sum1 = factorial(dim) / factorial(dim - 1)
+    sum2 = factorial(dim + 1) / (factorial(dim - 1) * 2)
+    mat_size = round(1 + sum1 + sum2)
+
+    # calculate indices
+    ind_d = jnp.diag_indices(dim)
+    ind_u = jnp.triu_indices(dim, 1)
+
+    # mls matrix entries
+    def matrix(w_dist, r_ji):
+        tensor = jnp.tensordot(r_ji, r_ji, axes=0)
+
+        row = jnp.ones(mat_size)
+        row = row.at[1 : dim + 1].mul(r_ji)
+        row = row.at[dim + 1 : 2 * dim + 1].mul(tensor[ind_d] * 0.5)
+        row = row.at[2 * dim + 1 :].mul(tensor[ind_u])
+
+        column = jnp.ones(mat_size)
+        column = column.at[1 : dim + 1].mul(r_ji)
+        column = column.at[dim + 1 : 2 * dim + 1].mul(tensor[ind_d])
+        column = column.at[2 * dim + 1 :].mul(tensor[ind_u] * 2)
+
+        return jnp.tensordot(column, row, axes=0) * w_dist
+
+    # calculate matrix
+    temp = vmap(matrix)(w_dist, r_ji)
+    mat = ops.segment_sum(temp, i_s, n_target)
+
+    # define solution vector entries
+    def vector(w_dist, r_ji, f_j):
+        tensor = jnp.tensordot(r_ji, r_ji, axes=0)
+        vector = jnp.ones(mat_size) * w_dist * f_j
+        vector = vector.at[1 : dim + 1].mul(r_ji)
+        vector = vector.at[dim + 1 : 2 * dim + 1].mul(tensor[ind_d])
+        vector = vector.at[2 * dim + 1 :].mul(tensor[ind_u] * 2)
+        return vector
+
+    # calculate vector
+    temp = vmap(vector)(w_dist, r_ji, f_pbc[j_s])
+    vec = ops.segment_sum(temp, i_s, n_target)
+
+    # function for solving the system
+    def solve_lin(matrix, vector):
+        temp = jnp.linalg.solve(matrix, vector)
+        return temp[0]
+
+    # calculate interpolated value
+    f_target = vmap(solve_lin)(mat, vec)
+
+    return f_target
+
+def pbc_copy_scalar(
+    r: array, f: array, box_size: array, halo: float, dim: int, unsorted: bool = True
+):
+    """Copy particles of a scalar field for PBCs on a rectangular domain
+
+    Args:
+        r (np.ndarray): coordinates of N particles of shape (N, dim)
+        f (np.ndarray): vector field, e.g. velocity of shape (N, dim)
+        box_size (np.ndarray): Domain box of form np.array([x_size, y_size, z_size])
+        halo (float): Width of halo region, e.g. 3h for Quintic spline
+        dim (int): dimension of the data
+        unsorted (bool): whether indices remain the same
+
+    Returns:
+        (np.ndarray, np.ndarray): new positions and properties after copying
+    """
+    if dim == 1:
+        # get right side indices
+        right = np.where(r <= halo, True, False)
+
+        # get left side indices
+        left = np.where(r >= box_size - halo, True, False)
+
+        # concatenate pbc values
+        r = np.concatenate((r, r[right] + box_size, r[left] - box_size))
+        f = np.concatenate((f, f[right], f[left]))
+
+        # rid of possible overlap
+        ind = np.unique(r, axis=0, return_index=True)[1]
+        ind = sorted(ind) if unsorted else ind
+        r_pbc = r[ind]
+        f_pbc = f[ind]
+
+    elif dim == 2:
+        # left and right side first
+        # get indices
+        right = np.where(r[:, 0] <= halo, True, False)
+        left = np.where(r[:, 0] >= box_size[0] - halo, True, False)
+
+        # concatenate pbc values
+        dr = np.array([box_size[0], 0.0])[None, :]
+        r = np.concatenate((r, r[right, :] + dr, r[left, :] - dr), axis=0)
+        f = np.concatenate((f, f[right], f[left]))
+
+        # now top and bottom
+        # get indices
+        top = np.where(r[:, 1] <= halo, True, False)
+        bottom = np.where(r[:, 1] >= box_size[1] - halo, True, False)
+
+        # concatenate pbc values
+        dr = np.array([0.0, box_size[1]])[None, :]
+        r = np.concatenate((r, r[top, :] + dr, r[bottom, :] - dr), axis=0)
+        f = np.concatenate((f, f[top], f[bottom]))
+
+        # rid of possible overlap
+        ind = np.unique(r, axis=0, return_index=True)[1]
+        ind = sorted(ind) if unsorted else ind
+        r_pbc = r[ind, :]
+        f_pbc = f[ind]
+
+    elif dim == 3:
+        # left and right side first
+        # get indices
+        right = np.where(r[:, 0] <= halo, True, False)
+        left = np.where(r[:, 0] >= box_size[0] - halo, True, False)
+
+        # concatenate pbc values
+        dr = np.array([box_size[0], 0.0, 0.0])[None, :]
+        r = np.concatenate((r, r[right, :] + dr, r[left, :] - dr), axis=0)
+        f = np.concatenate((f, f[right], f[left]))
+
+        # now top and bottom
+        # get indices
+        top = np.where(r[:, 1] <= halo, True, False)
+        bottom = np.where(r[:, 1] >= box_size[1] - halo, True, False)
+
+        # concatenate pbc values
+        dr = np.array([0.0, box_size[1], 0.0])[None, :]
+        r = np.concatenate((r, r[top, :] + dr, r[bottom, :] - dr), axis=0)
+        f = np.concatenate((f, f[top], f[bottom]))
+
+        # now front and back
+        # get indices
+        back = np.where(r[:, 2] <= halo, True, False)
+        front = np.where(r[:, 2] >= box_size[2] - halo, True, False)
+
+        # concatenate pbc values
+        dr = np.array([0.0, 0.0, box_size[2]])[None, :]
+        r = np.concatenate((r, r[back, :] + dr, r[front, :] - dr), axis=0)
+        f = np.concatenate((f, f[back], f[front]))
+
+        # rid of possible overlap
+        ind = np.unique(r, axis=0, return_index=True)[1]
+        ind = sorted(ind) if unsorted else ind
+        r_pbc = r[ind, :]
+        f_pbc = f[ind]
+
+    return r_pbc, f_pbc
+
+
+def get_real_wavenumber_grid(n, dim):
+    Nf = n // 2 + 1
+    k = np.fft.fftfreq(n, 1.0 / n)  # for other dimensions
+    kx = k[:Nf].copy()
+    kx[-1] *= -1
+    if dim == 2:
+        k_field = np.array(np.meshgrid(kx, k, indexing="ij"), dtype=int)
+    elif dim == 3:
+        k_field = np.array(np.meshgrid(kx, k, k, indexing="ij"), dtype=int)
+    return k_field, k
+
+def energy_spectrum(vel: Array, mul_fac: float = 1.0, is_scalar_field: bool = False):
+    """JAX implemented energy spectrum computation on a grid.
+
+    Code based on JAX-FLUIDS implementation."""
+
+    dim = vel.shape[0]
+    ns = vel.shape[1:]
+
+    # check for square box with equal side length
+    assert jnp.array_equal(ns, jnp.ones(dim) * ns[0])
+
+    # common resolution
+    n = ns[0]
+
+    # Fourier transform
+    if dim == 1:
+        # TODO: check whether 1D is working
+        vel_hat = jnp.fft.rfftn(vel)
+    elif dim == 2:
+        vel_hat = jnp.fft.rfftn(vel, axes=(2, 1))
+    elif dim == 3:
+        vel_hat = jnp.fft.rfftn(vel, axes=(3, 2, 1))
+
+    # initialize wavenumber grid
+    k_field, k = get_real_wavenumber_grid(n, dim)
+
+    # compute prefactor
+    fact = (
+        2 * (k_field[0] > 0) * (k_field[0] < n // 2)
+        + 1 * (k_field[0] == 0)
+        + 1 * (k_field[0] == n // 2)
+    )
+
+    # calculate wavenumber vector norms
+    k_field_norm = jnp.linalg.norm(k_field, axis=0, ord=2)
+
+    # calculate integration shell
+    shell = (k_field_norm + 0.5).astype(int).flatten()
+
+    # fourier transform prefactor
+    vel_hat /= n**dim
+
+    # calculate energy
+    abs_energy = jnp.sum(jnp.abs(vel_hat**2), axis=0)
+    abs_energy *= fact * mul_fac
+
+    # number of samples
+    n_samples = jnp.zeros(n)
+    n_samples = n_samples.at[shell].add(fact.flatten())
+
+    # compute energy spectrum
+    ek = jnp.zeros(n)
+    ek = ek.at[shell].add(abs_energy.flatten())
+    ek *= 4 * jnp.pi * k**2 / (n_samples + EPS)
+
+    return ek
+
+class M4PrimeKernel:
+    """The M'4 kernel"""
+
+    def __init__(self, h, dim=3):
+        self._one_over_h = 1.0 / h
+        self._normalized_cutoff = 2.0
+        self.cutoff = self._normalized_cutoff * h
+
+    def w(self, r):
+        """Evaluates the kernel at the radial displacement vector r."""
+        q = r * self._one_over_h
+        q1 = 1 - 2.5 * q**2 + 1.5 * q**3
+        q2 = 0.5 * (1 - q) * (2 - q) ** 2
+
+        res = jnp.where(q < 1, q1, 0)
+        res = jnp.where((q >= 1) * (q < 2), q2, res)
+        return jnp.prod(res)  # , axis=1
+
+
+class FourierQuinticKernel:
+    """The quintic kernel function of Morris in Fourier space."""
+
+    def __init__(self, h, dim=3):
+        self._one_over_h = 1.0 / h
+
+        self._normalized_cutoff = 3.0
+        self.cutoff = self._normalized_cutoff * h
+        if dim == 1:
+            self._sigma = 1.0 / 120.0 * self._one_over_h
+        elif dim == 2:
+            self._sigma = 7.0 / 478.0 / jnp.pi * self._one_over_h**2
+        elif dim == 3:
+            self._sigma = 3.0 / 359.0 / jnp.pi * self._one_over_h**3
+
+    def w(self, k):
+        q1 = (jnp.exp(-2 * jnp.pi * 1j * k) * (3 * jnp.exp(2 * jnp.pi * 1j * k) * \
+                (44 * jnp.pi**5 * 1j**5 * k**5 - 20 * jnp.pi**3 * 1j**3 * k**3 + 30 * \
+                jnp.pi * 1j * k - 25) - 2 * jnp.pi * 1j * k * ( \
+                jnp.pi * 1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * (26 * jnp.pi * \
+                1j * k - 25) + 10) + 15) - 30) + 75)) / (4 * jnp.pi**6 * 1j**6 * k**6)
+        q2 = (jnp.exp(-4 * jnp.pi * 1j * k) * (-2 * jnp.pi * 1j * k * (jnp.pi * 1j * k * \
+                (jnp.pi * 1j * k * (jnp.pi * 1j * k * (2 * jnp.pi * 1j * k - 5) + 10) - 15) \
+                + 15) + jnp.exp(2 * jnp.pi * 1j * k) * (4 * jnp.pi * 1j * k * (jnp.pi * \
+                1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * (26 * jnp.pi * 1j * k \
+                - 25) + 10) + 15) - 30) + 75) - 75)) / (8 * jnp.pi**6 * 1j**6 * k**6)
+        q3 = (jnp.exp(-6 * jnp.pi * 1j * k) * (jnp.exp(2 * jnp.pi * 1j * k) * (2 * \
+                jnp.pi * 1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * \
+                (jnp.pi * 1j * k * (2 * jnp.pi * 1j * k - 5) + 10) - 15) + 15) - 15) + 15)) \
+                / (8 * jnp.pi**6 * 1j**6 * k**6)
+        return self._sigma * (q1 + q2 + q3)
