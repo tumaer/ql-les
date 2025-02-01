@@ -6,7 +6,7 @@ from torch import Tensor
 from lightning import LightningModule
 from src.models.components.gns import get_random_walk_noise_for_position_sequence
 from src.utils.train_utils import (
-    push_forward_sample_steps, eval_rollout, integrate, particle_mse
+    pushforward_sample_steps, pushforward_fn, eval_rollout, particle_mse
 )
 
 class GNSLitModule(LightningModule):
@@ -98,7 +98,7 @@ class GNSLitModule(LightningModule):
         # Determine the number of pushforward steps, if applicable
         unroll_steps = 0
         if self.global_step != 0 and self.pushforward is not None:
-            updated_seed, unroll_steps = push_forward_sample_steps(
+            updated_seed, unroll_steps = pushforward_sample_steps(
                 seed=self.seed, step=self.global_step, pushforward=self.pushforward
             )
             self.seed = updated_seed
@@ -116,36 +116,24 @@ class GNSLitModule(LightningModule):
         
         # Prepare features for the forward pass
         features = {
-            "next_position": batch.target_pos[:, 0, :],  # Only the first target position
+            "next_position": batch.target_pos[:, 0],  # Only the first target position
             "position": batch.enc_pos,
             "n_particles_per_trajectory": batch.n_particles_per_trajectory,
             "particle_type": batch.particle_type,
             "pbc": self.pbc,
             "normalization_stats": self.net.normalization_stats,
             "boundaries": self.net._boundaries,
-            "sampled_noise": sampled_noise,         
+            "sampled_noise": sampled_noise
         }
         if self.alpha_u != 0.0:
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
 
-        # Perform pushforward integration if unroll_steps > 0
+        # Perform pushforward if unroll_steps > 0
         if unroll_steps > 0:
-            # print(f"Pushing forward {unroll_steps} steps!!!")
-            for _ in range(unroll_steps):
-                features["next_position"] = batch.target_pos[:, unroll_steps, :]
-                pred, target = self.forward(features)
-                # TODO: Fix pushforward somehow?
-                next_pos = integrate(
-                    normalized_acceleration=pred,
-                    position_sequence=features["position"],
-                    normalization_stats=features["normalization_stats"]["v_acceleration"],
-                    boundaries=features["boundaries"],
-                    pbc=features["pbc"],
-                )
-                features["position"] = torch.cat(
-                    [features["position"][:, 1:], next_pos[:, None, :]], dim=1
-                )
+             # print(f"Pushing forward {unroll_steps} steps!!!")
+            target_positions = batch.target_pos
+            pred, target = pushforward_fn(features, target_positions, unroll_steps, self.forward)
         else:
             # Forward pass
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
@@ -219,9 +207,9 @@ class GNSLitModule(LightningModule):
                                                         vis_config=self.visualize["vis_val"],
                                                         trajectory_idx=self.trajectory_idx)
             
-            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
+            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
             self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
 
         self.trajectory_idx += 1
@@ -243,7 +231,7 @@ class GNSLitModule(LightningModule):
                                 u_vel=False,
                                 vis_config=self.visualize["vis_test"],
                                 trajectory_idx=self.trajectory_idx)
-            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
         else:
             position_loss, u_vel_loss = eval_rollout(batch=batch,
                                                         simulator=self.net,
@@ -257,10 +245,10 @@ class GNSLitModule(LightningModule):
                                                         vis_config=self.visualize["vis_test"],
                                                         trajectory_idx=self.trajectory_idx)
                 
-            self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, batch_size=batch.batch_size)
-            self.log("test/loss_ekin", position_loss["e_kin"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+            self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+            self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+            self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+            self.log("test/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size) #only shifting velocity currently
         
         self.trajectory_idx += 1
     def on_fit_start(self) -> None:
@@ -304,5 +292,6 @@ class GNSLitModule(LightningModule):
                 },
             }
         return {"optimizer": optimizer}
+    
     
     

@@ -36,6 +36,7 @@ pytest          # tests
 # --------- LagrangeBench --------- #
 h5py
 wget
+jax
 matplotlib
 pickle-mixin
 pyvista

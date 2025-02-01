@@ -1,4 +1,3 @@
-import os
 import copy
 import torch
 import torch.nn as nn
@@ -8,10 +7,6 @@ from src.utils.neighbor_search_algorithms import compute_connectivity_pbc #Alter
 from src.utils.data_utils import load_metadata
 from pathlib import Path
 
-
-# from torch.utils.tensorboard import SummaryWriter
-os.makedirs('train_log', exist_ok=True)
-os.makedirs('rollouts', exist_ok=True)
 
 EPSILON = 1e-8
 
@@ -538,7 +533,7 @@ class Simulator(nn.Module):
         next_position = next_position.squeeze(1)
         noisy_position_sequence = self.shift_fn(position_sequence, position_sequence_noise)
         next_position_adjusted = self.shift_fn(next_position, position_sequence_noise[:, -1])
-        
+
         #Compute the target normalized acceleration
         if self._case == "KOLM":
             u_velocity = kwargs["u_velocity"]

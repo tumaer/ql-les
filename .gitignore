@@ -76,7 +76,6 @@ target/
 
 # Jupyter Notebook
 /notebooks/media/
-/notebooks/jax_utils/
 .ipynb_checkpoints
 
 # IPython
