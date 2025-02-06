@@ -15,7 +15,7 @@ defaults:
 # this allows you to overwrite only specified parameters
 
 #for eval
-ckpt_path: ${paths.log_dir}/train/runs/kolm_2d_runs_28_01/runs/2025-01-28_21-49-26/checkpoints/last-v2.ckpt # Replace with the path to the exact checkpoint file
+ckpt_path: ${paths.log_dir}/train/runs/kolm_2d_runs_28_01/runs/2025-01-28_21-49-26/checkpoints/last.ckpt # Replace with the path to the exact checkpoint file
 
 
 model:
