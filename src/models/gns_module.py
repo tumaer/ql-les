@@ -47,8 +47,11 @@ class GNSLitModule(LightningModule):
         # Loss weights
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
-        self.net.alpha_u = alpha_u
 
+        if (alpha_u != 0.0) and ("KOLM" in self.net._case):
+            raise NotImplementedError(
+                "Alpha_u > 0.0 is only implemented for the Kolmogorov dataset."
+            )
         # Push forward configuration
         self.seed = seed
         self.pushforward = pushforward
@@ -139,10 +142,7 @@ class GNSLitModule(LightningModule):
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
             pred, target = self.forward(features)
             
-        if self.alpha_u == 0.0:
-            # Calculate loss
-            loss = particle_mse(pred, target, non_kinematic_mask)
-        else:
+        if self.alpha_u != 0.0:
             # Split predictions and targets into a_u and a_v
             a_v_pred, a_u_pred = pred
             a_v_target, a_u_target = target
@@ -153,6 +153,9 @@ class GNSLitModule(LightningModule):
 
             # Weighted combined loss
             loss = self.alpha_v * loss_v + self.alpha_u * loss_u
+        else:
+            # Calculate loss
+            loss = particle_mse(pred, target, non_kinematic_mask)
 
         return loss
 
@@ -171,7 +174,26 @@ class GNSLitModule(LightningModule):
         """Perform a single validation step, using the forward method to infer positions."""
         #ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
-        if self.alpha_u == 0.0:
+       
+                   
+        if self.alpha_u != 0.0:
+            position_loss, u_vel_loss = eval_rollout(batch=batch,
+                                                        simulator=self.net,
+                                                        metadata=self.net.metadata, 
+                                                        num_rollout_steps=self.num_rollout_steps,
+                                                        pbc=self.pbc,
+                                                        vel_solver=self.vel_solver,
+                                                        device=self.net._device,
+                                                        active_metrics=self.active_metrics,
+                                                        u_vel=True,
+                                                        vis_config=self.visualize["vis_val"],
+                                                        trajectory_idx=self.trajectory_idx)
+            
+            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
+            self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+        else:
             loss = eval_rollout(batch=batch,
                                 simulator=self.net, 
                                 metadata=self.net.metadata, 
@@ -193,24 +215,7 @@ class GNSLitModule(LightningModule):
             #MAE
             
             #E_KIN
-            self.log("val/loss_ekin", loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)            
-        else:
-            position_loss, u_vel_loss = eval_rollout(batch=batch,
-                                                        simulator=self.net,
-                                                        metadata=self.net.metadata, 
-                                                        num_rollout_steps=self.num_rollout_steps,
-                                                        pbc=self.pbc,
-                                                        vel_solver=self.vel_solver,
-                                                        device=self.net._device,
-                                                        active_metrics=self.active_metrics,
-                                                        u_vel=True,
-                                                        vis_config=self.visualize["vis_val"],
-                                                        trajectory_idx=self.trajectory_idx)
-            
-            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+            self.log("val/loss_ekin", loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)     
 
         self.trajectory_idx += 1
         
@@ -220,19 +225,7 @@ class GNSLitModule(LightningModule):
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
         # Evaluate the trajectory rollout
-        if self.alpha_u == 0.0:
-            loss = eval_rollout(batch=batch,
-                                simulator=self.net, 
-                                metadata=self.net.metadata, 
-                                num_rollout_steps=self.num_rollout_steps,
-                                pbc=self.pbc, 
-                                device=self.net._device,
-                                active_metrics=self.active_metrics,
-                                u_vel=False,
-                                vis_config=self.visualize["vis_test"],
-                                trajectory_idx=self.trajectory_idx)
-            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-        else:
+        if self.alpha_u != 0.0:
             position_loss, u_vel_loss = eval_rollout(batch=batch,
                                                         simulator=self.net,
                                                         metadata=self.net.metadata, 
@@ -249,8 +242,21 @@ class GNSLitModule(LightningModule):
             self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
             self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
             self.log("test/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size) #only shifting velocity currently
+        else:
+            loss = eval_rollout(batch=batch,
+                                simulator=self.net, 
+                                metadata=self.net.metadata, 
+                                num_rollout_steps=self.num_rollout_steps,
+                                pbc=self.pbc, 
+                                device=self.net._device,
+                                active_metrics=self.active_metrics,
+                                u_vel=False,
+                                vis_config=self.visualize["vis_test"],
+                                trajectory_idx=self.trajectory_idx)
+            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
         
         self.trajectory_idx += 1
+        
     def on_fit_start(self) -> None:
         self.net.set_metadata_device(self.net._device)    
     

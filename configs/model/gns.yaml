@@ -18,6 +18,7 @@ net:
   noise_std: 6.7e-4 
   num_particle_types: 9
   particle_type_embedding_size: 16
+  alpha_u: ${model.alpha_u}
 
 # Optimizer configuration
 optimizer:

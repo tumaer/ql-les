@@ -203,7 +203,7 @@ class EncodeProcessDecode(nn.Module):
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
-        case
+        alpha_u
         
     ):
         super(EncodeProcessDecode, self).__init__()
@@ -230,16 +230,16 @@ class EncodeProcessDecode(nn.Module):
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
         )
-        self._case = case
+        self.alpha_u = alpha_u
 
     def forward(self, x, edge_index, e_features):
         # x: (E, node_in)
         x, e_features = self._encoder(x, edge_index, e_features)
         x, e_features = self._processor(x, edge_index, e_features)
         x = self._decoder(x)
-        if self._case == "KOLM":
-            a_u, a_v = torch.chunk(x, 2, dim=-1)
-            return a_u, a_v
+        if self.alpha_u != 0:
+            a_v, a_u = torch.chunk(x, 2, dim=-1)
+            return a_v, a_u
         else:
             return x
 
@@ -259,6 +259,7 @@ class Simulator(nn.Module):
         num_particle_types,
         particle_type_embedding_size,
         device,
+        alpha_u
     ):
         super(Simulator, self).__init__()
         self._num_particle_types = num_particle_types
@@ -271,6 +272,7 @@ class Simulator(nn.Module):
         self._effective_dt = self.metadata["dt"] * self.metadata["write_every"]
         self._device = device
         self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
+        self.alpha_u = alpha_u
 
         self._encode_process_decode = EncodeProcessDecode(
             node_in=node_in,
@@ -280,43 +282,14 @@ class Simulator(nn.Module):
             num_message_passing_steps=num_message_passing_steps,
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
-            case=self._case,
+            alpha_u=alpha_u
         
         )
         
     def set_metadata_device(self, device=None):
         if device is None:
             device = self._device
-        if self._case == "KOLM":
-            self.normalization_stats = {
-            "v_acceleration": {
-                "mean": torch.FloatTensor(self.metadata["av_mean"]).to(device),
-                "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["av_std"]) ** 2 + self.noise_std**2
-                ).to(device),
-            },
-            "v_velocity": {
-                "mean": torch.FloatTensor(self.metadata["v_mean"]).to(device),
-                "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["v_std"]) ** 2 + self.noise_std**2
-                ).to(device),
-            },
-            "u_acceleration": {
-                "mean": torch.FloatTensor(self.metadata["au_mean"]).to(device),
-                "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["au_std"]) ** 2 + self.noise_std**2
-                ).to(device),
-            },
-            "u_velocity": {
-                "mean": torch.FloatTensor(self.metadata["u_mean"]).to(device),
-                "std": torch.sqrt(
-                    torch.FloatTensor(self.metadata["u_std"]) ** 2 + self.noise_std**2
-                ).to(device),
-            },
-        }
-        
-        else:
-            self.normalization_stats = {
+        self.normalization_stats = {
                 "v_acceleration": {
                     "mean": torch.FloatTensor(self.metadata["acc_mean"]).to(device),
                     "std": torch.sqrt(
@@ -330,9 +303,24 @@ class Simulator(nn.Module):
                     ).to(device),
                 },
             }
+        
         self._boundaries = (
             torch.tensor(self.metadata["bounds"], requires_grad=False).float().to(device)
         )
+        if self.alpha_u != 0:
+            self.normalization_stats["u_acceleration"] = {
+                "mean": torch.FloatTensor(self.metadata["au_mean"]).to(device),
+                "std": torch.sqrt(
+                    torch.FloatTensor(self.metadata["au_std"]) ** 2 + self.noise_std**2
+                ).to(device),
+            },
+            self.normalization_stats["u_velocity"] = {
+                "mean": torch.FloatTensor(self.metadata["u_mean"]).to(device),
+                "std": torch.sqrt(
+                    torch.FloatTensor(self.metadata["u_std"]) ** 2 + self.noise_std**2
+                ).to(device),
+            }
+    
         #Subract the ends of the box to get its size (used for PBC)
         self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
     
@@ -390,7 +378,7 @@ class Simulator(nn.Module):
         v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
         node_features.append(v_flat_velocity_sequence)
         
-        if self.alpha_u != 0:  # TODO: find a better condition!
+        if self.alpha_u != 0:
             u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
             u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
             u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
@@ -480,7 +468,7 @@ class Simulator(nn.Module):
         most_recent_position = position_sequence[:, -1]
         most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
 
-        if self._case == "KOLM":
+        if self.alpha_u != 0:
             vel_solver = kwargs["vel_solver"]
             u_velocity = kwargs["u_velocity"]
             a_u_pred = kwargs["a_u_pred"]
@@ -515,7 +503,7 @@ class Simulator(nn.Module):
         if pbc:
             current_positions = current_positions % self._boundaries
             
-        if self._case == "KOLM":
+        if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             vel_solver = kwargs["vel_solver"]
             node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
@@ -535,7 +523,7 @@ class Simulator(nn.Module):
         next_position_adjusted = self.shift_fn(next_position, position_sequence_noise[:, -1])
 
         #Compute the target normalized acceleration
-        if self._case == "KOLM":
+        if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
@@ -558,7 +546,7 @@ class Simulator(nn.Module):
         previous_v_velocity = self.displ_fn(previous_position, position_sequence[:, -2])
         next_v_velocity = self.displ_fn(next_position, previous_position)
 
-        if self._case == "KOLM":
+        if self.alpha_u != 0:
             next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
             previous_u_velocity = kwargs["u_velocity"][:, -1]
 
