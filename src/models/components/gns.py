@@ -313,7 +313,7 @@ class Simulator(nn.Module):
                 "std": torch.sqrt(
                     torch.FloatTensor(self.metadata["au_std"]) ** 2 + self.noise_std**2
                 ).to(device),
-            },
+            }
             self.normalization_stats["u_velocity"] = {
                 "mean": torch.FloatTensor(self.metadata["u_mean"]).to(device),
                 "std": torch.sqrt(

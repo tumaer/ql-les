@@ -48,7 +48,7 @@ class GNSLitModule(LightningModule):
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
 
-        if (alpha_u != 0.0) and ("KOLM" in self.net._case):
+        if (alpha_u != 0.0) and ("KOLM" not in self.net._case):
             raise NotImplementedError(
                 "Alpha_u > 0.0 is only implemented for the Kolmogorov dataset."
             )
