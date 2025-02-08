@@ -218,7 +218,8 @@ class Simulator(nn.Module):
         num_particle_types,
         particle_type_embedding_size,
         device,
-        alpha_u
+        alpha_u,
+        vel_solver=None,
     ):
         super(Simulator, self).__init__()
         self._num_particle_types = num_particle_types
@@ -232,6 +233,9 @@ class Simulator(nn.Module):
         self._device = device
         self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
         self.alpha_u = alpha_u
+        self.vel_solver = vel_solver
+        if alpha_u != 0:
+            assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
 
         self._encode_process_decode = EncodeProcessDecode(
             node_in=node_in,
@@ -415,7 +419,6 @@ class Simulator(nn.Module):
         most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
 
         if self.alpha_u != 0:
-            vel_solver = kwargs["vel_solver"]
             u_velocity = kwargs["u_velocity"]
             a_u_pred = kwargs["a_u_pred"]
             u_acceleration = self._denorm(a_u_pred, "ua")
@@ -423,34 +426,34 @@ class Simulator(nn.Module):
             most_recent_u_velocity = u_velocity[:, -1]
 
             # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
-            if vel_solver == "simple":
+            if self.vel_solver == "simple":
                 new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
                 new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)   
 
-            elif vel_solver == "tvf":
+            elif self.vel_solver == "tvf":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)   
                 
-            elif vel_solver == "neural_sph":
+            elif self.vel_solver == "neural_sph":
                 new_v_velocity = most_recent_v_velocity + v_acceleration
                 new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)   
                 
-            elif vel_solver == "simple_u":
+            elif self.vel_solver == "simple_u":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
-            elif vel_solver == "simple_u_closure":
+            elif self.vel_solver == "simple_u_closure":
                 au_sph = self._sph(most_recent_position, kwargs["n_part_per_traj"], most_recent_u_velocity)
                 # TODO: au_sph * dt 20x larger than the predicted one
                 new_u_velocity = most_recent_u_velocity + u_acceleration + au_sph * self._effective_dt
                 new_v_velocity = most_recent_v_velocity + v_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
                 
-            elif vel_solver == "simple_rlx":
+            elif self.vel_solver == "simple_rlx":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_pos_temp = self.shift_fn(
                     most_recent_position, self._effective_dt * new_u_velocity
@@ -520,11 +523,10 @@ class Simulator(nn.Module):
             
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
-            vel_solver = kwargs["vel_solver"]
             node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             next_position, new_u_velocity = self._decoder_postprocessor(
-                a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, vel_solver=vel_solver, 
+                a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, 
                 u_velocity=u_velocity, n_part_per_traj=n_particles_per_trajectory
             )
             return next_position, new_u_velocity
@@ -550,7 +552,7 @@ class Simulator(nn.Module):
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             a_v_target, a_u_target = self._inverse_decoder_postprocessor(
                 next_position_adjusted, noisy_position_sequence, pbc, 
-                next_u_velocity=next_u_velocity, u_velocity=u_velocity, vel_solver=kwargs["vel_solver"],
+                next_u_velocity=next_u_velocity, u_velocity=u_velocity,
                 n_part_per_traj=n_particles_per_trajectory
             )
             
@@ -574,31 +576,30 @@ class Simulator(nn.Module):
             next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
             previous_u_velocity = kwargs["u_velocity"][:, -1]
 
-            vel_solver = kwargs["vel_solver"]
             # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
-            if vel_solver == "simple":
+            if self.vel_solver == "simple":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = next_v_velocity - previous_v_velocity
 
-            elif vel_solver == "tvf":
+            elif self.vel_solver == "tvf":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = next_v_velocity - self._u2v(next_u_velocity)
                 
-            elif vel_solver == "neural_sph":
+            elif self.vel_solver == "neural_sph":
                 v_acceleration = next_v_velocity - previous_v_velocity
                 u_acceleration = next_u_velocity - self._v2u(next_v_velocity)
 
-            elif vel_solver == "simple_u":
+            elif self.vel_solver == "simple_u":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = next_v_velocity - self._u2v(previous_u_velocity)
                 
-            elif vel_solver == "simple_u_closure":
+            elif self.vel_solver == "simple_u_closure":
                 au_sph = self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity)
                 # au_sph is 3x larger than difference in u's
                 u_acceleration = next_u_velocity - previous_u_velocity -  au_sph * self._effective_dt
                 v_acceleration = next_v_velocity - previous_v_velocity
 
-            elif vel_solver == "simple_rlx":
+            elif self.vel_solver == "simple_rlx":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = torch.zeros_like(u_acceleration)                
 

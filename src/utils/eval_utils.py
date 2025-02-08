@@ -66,7 +66,7 @@ def pkl2vtk(src_path, dst_path=None):
         # predictions
         state_vtk = {
             "r": rollout["predicted_rollout"][k],
-            "tag": rollout["particle_type"],
+            "tag": rollout["particle_types"],
         }
         if "predicted_u_vel" in rollout:
             state_vtk["u"] = rollout["predicted_u_vel"][k]
@@ -74,7 +74,7 @@ def pkl2vtk(src_path, dst_path=None):
         # ground truth reference
         state_vtk = {
             "r": rollout["ground_truth_rollout"][k],
-            "tag": rollout["particle_type"],
+            "tag": rollout["particle_types"],
         }
         if "ground_truth_u_vel" in rollout:
             state_vtk["u"] = rollout["ground_truth_u_vel"][k]

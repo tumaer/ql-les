@@ -43,7 +43,7 @@ def pushforward_sample_steps(seed, step, pushforward):
 
 def pushforward_preprocess(features, target_pos, unroll_steps):
     """ """
-    position_input, normalization_stats, boundaries = features["position"], features["normalization_stats"], features["boundaries"]
+    position_input, normalization_stats, boundaries = features["position_sequence"], features["normalization_stats"], features["boundaries"]
     position_target = target_pos
     
     input_sequence_size = position_input.size(1)
@@ -88,14 +88,14 @@ def pushforward_fn(features, target_positions, unroll_steps, forward_function):
         
         next_pos = integrate(
                     normalized_acceleration=pred,
-                    position_sequence=features["position"],
+                    position_sequence=features["position_sequence"],
                     normalization_stats=features["normalization_stats"]["v_acceleration"],
                     boundaries=features["boundaries"],
                     pbc=features["pbc"]
                 )
                 
-        features["position"] = torch.cat(
-                    [features["position"][:, 1:], next_pos[:, None, :]], dim=1
+        features["position_sequence"] = torch.cat(
+                    [features["position_sequence"][:, 1:], next_pos[:, None, :]], dim=1
                 )
         
     return pred, target_acceleration
@@ -214,7 +214,7 @@ def eval_rollout(batch,
             features = {
                 "enc_pos": batch.enc_pos,
                 "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-                "particle_type": batch.particle_type,
+                "particle_types": batch.particle_types,
                 "target_pos": batch.target_pos,
                 "bounds": boundaries
             }
@@ -231,12 +231,11 @@ def eval_rollout(batch,
             features = {
                 "enc_pos": batch.enc_pos,
                 "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-                "particle_type": batch.particle_type,
+                "particle_types": batch.particle_types,
                 "target_pos": batch.target_pos,
                 "bounds": boundaries,
                 "u_velocity": batch.enc_u,
                 "next_u_velocity": batch.target_u,
-                "vel_solver": kwargs["vel_solver"]
             }
 
             computed_metrics, rollout, ground_truth = eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel)
@@ -284,10 +283,10 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
             next_position = simulator.predict_positions(
                 current_positions=current_positions,
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                particle_types=features["particle_type"],
+                particle_types=features["particle_types"],
                 pbc=pbc,
             )
-            kinematic_mask = (features["particle_type"] == 3).bool()[:, None].expand(-1, dim)
+            kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
             next_position_ground_truth = ground_truth_positions[:, step]
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
@@ -305,18 +304,16 @@ def eval_single_rollout(simulator, features, num_rollout_steps, pbc, metadata, a
     else:   
         current_u_velocity = features["u_velocity"] #initial u_velocity
         ground_truth_u_velocity = features["next_u_velocity"]
-        vel_solver = features["vel_solver"]
         u_vel_predictions = []
         for step in range(num_rollout_steps):
             next_position, new_u_velocity = simulator.predict_positions(
                     current_positions=current_positions,
                     n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                    particle_types=features["particle_type"],
+                    particle_types=features["particle_types"],
                     pbc=pbc,
                     u_velocity=current_u_velocity,
-                    vel_solver=vel_solver
             )
-            kinematic_mask = (features["particle_type"] == 3).bool()[:, None].expand(-1, dim)
+            kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
             next_position_ground_truth = ground_truth_positions[:, step]
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
@@ -461,7 +458,7 @@ def write_rollout(batch, trajectory_idx, trajectory_rollout, ground_truth_positi
             example_rollout_dict = {
                     "predicted_rollout": example_full.cpu().numpy(),  # Convert to NumPy
                     "ground_truth_rollout": ground_truth_rollout.cpu().numpy(),  # Convert to NumPy
-                    "particle_type": batch.particle_type[batch_offset:batch_offset + num_particles].cpu().numpy(),  # Convert to NumPy
+                    "particle_types": batch.particle_types[batch_offset:batch_offset + num_particles].cpu().numpy(),  # Convert to NumPy
                 }
             
             if u_vel:
@@ -484,14 +481,14 @@ def write_rollout(batch, trajectory_idx, trajectory_rollout, ground_truth_positi
                     # Predictions
                     state_vtk = {
                         "r": example_rollout_dict["predicted_rollout"][k],
-                        "tag": example_rollout_dict["particle_type"],
+                        "tag": example_rollout_dict["particle_types"],
                     }
                     write_vtk(state_vtk, f"{file_prefix}_{k}.vtk")
                 for k in range(ground_truth_rollout.shape[0]):
                     # Ground truth reference
                     ref_state_vtk = {
                         "r": example_rollout_dict["ground_truth_rollout"][k],
-                        "tag": example_rollout_dict["particle_type"],
+                        "tag": example_rollout_dict["particle_types"],
                     }
                     write_vtk(ref_state_vtk, f"{file_prefix}_ref_{k}.vtk")
             elif out_type == "pkl":

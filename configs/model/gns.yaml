@@ -19,6 +19,7 @@ net:
   num_particle_types: 9
   particle_type_embedding_size: 16
   alpha_u: ${model.alpha_u}
+  vel_solver: ${model.vel_solver}
 
 # Optimizer configuration
 optimizer:

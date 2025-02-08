@@ -67,37 +67,11 @@ class GNSLitModule(LightningModule):
         self.visualize = visualize
         self.trajectory_idx = 0
 
-        
-    def forward(
-        self,
-        features: Dict[str, Tensor],
-    ) -> Tensor:
-        if self.alpha_u != 0.0:  # if true, we recover LagrangeBench; TODO: think of better condition
-            pred, target_normalized_acceleration = self.net.predict_accelerations(
-                next_position=features["next_position"],
-                position_sequence_noise=features["sampled_noise"],
-                position_sequence=features["position"],
-                n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                particle_types=features["particle_type"],
-                pbc=features["pbc"],
-                u_velocity=features["u_velocity"],
-                next_u_velocity=features["next_u_velocity"],
-                vel_solver = self.vel_solver
-            )
-        else:
-            pred, target_normalized_acceleration = self.net.predict_accelerations(
-                next_position=features["next_position"],
-                position_sequence_noise=features["sampled_noise"],
-                position_sequence=features["position"],
-                n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                particle_types=features["particle_type"],
-                pbc=features["pbc"]
-            )
-        
-        return pred, target_normalized_acceleration
+    def forward(self, features: Dict[str, Tensor]) -> Tensor:
+        return self.net.predict_accelerations(**features)
     
     def model_step(self, batch: Any) -> Tensor:
-        """Perform a single forward pass through the model and compute the loss for a_u and a_v."""
+        """Forward pass through the model and compute the loss for a_u and a_v."""
         # Determine the number of pushforward steps, if applicable
         unroll_steps = 0
         if self.global_step != 0 and self.pushforward is not None:
@@ -106,28 +80,29 @@ class GNSLitModule(LightningModule):
             )
             self.seed = updated_seed
         #Random walk noise
-        sampled_noise = get_random_walk_noise_for_position_sequence(
+        position_sequence_noise = get_random_walk_noise_for_position_sequence(
             position_sequence=batch.enc_pos, 
             boundaries=self.net._boundaries,
             noise_std_last_step=self.net.noise_std,
             ).to(self.device)
-        
-        non_kinematic_mask = (batch.particle_type != 3).clone().detach()
-        sampled_noise *= non_kinematic_mask.view(-1, 1, 1)
+
+        non_kinematic_mask = (batch.particle_types != 3).clone().detach()
+        position_sequence_noise *= non_kinematic_mask.view(-1, 1, 1)
         if not self.training:
-            sampled_noise *= 0.0
+            position_sequence_noise *= 0.0
         
         # Prepare features for the forward pass
         features = {
             "next_position": batch.target_pos[:, 0],  # Only the first target position
-            "position": batch.enc_pos,
+            "position_sequence": batch.enc_pos,
             "n_particles_per_trajectory": batch.n_particles_per_trajectory,
-            "particle_type": batch.particle_type,
+            "particle_types": batch.particle_types,
             "pbc": self.pbc,
-            "normalization_stats": self.net.normalization_stats,
-            "boundaries": self.net._boundaries,
-            "sampled_noise": sampled_noise
+            "position_sequence_noise": position_sequence_noise,
         }
+        if self.pushforward is not None:
+            features["normalization_stats"] = self.net.normalization_stats
+            features["boundaries"] = self.net._boundaries,
         if self.alpha_u != 0.0:
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
@@ -174,48 +149,33 @@ class GNSLitModule(LightningModule):
         """Perform a single validation step, using the forward method to infer positions."""
         #ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
-       
-                   
+        loss = eval_rollout(
+            batch=batch,
+            simulator=self.net, 
+            metadata=self.net.metadata, 
+            num_rollout_steps=self.num_rollout_steps,
+            pbc=self.pbc, 
+            device=self.net._device,
+            active_metrics=self.active_metrics,
+            vis_config=self.visualize["vis_val"],
+            trajectory_idx=self.trajectory_idx,
+            u_vel=True if self.alpha_u != 0.0 else False
+        )
+
+        kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         if self.alpha_u != 0.0:
-            position_loss, u_vel_loss = eval_rollout(batch=batch,
-                                                        simulator=self.net,
-                                                        metadata=self.net.metadata, 
-                                                        num_rollout_steps=self.num_rollout_steps,
-                                                        pbc=self.pbc,
-                                                        vel_solver=self.vel_solver,
-                                                        device=self.net._device,
-                                                        active_metrics=self.active_metrics,
-                                                        u_vel=True,
-                                                        vis_config=self.visualize["vis_val"],
-                                                        trajectory_idx=self.trajectory_idx)
-            
-            self.log("val/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size) #only shifting velocity currently
+            position_loss, u_vel_loss = loss
+            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)  # TODO: different scales!!! Don't just add them
+            self.log("val/u_velocity_loss", u_vel_loss.mean(), **kwargs_log)
         else:
-            loss = eval_rollout(batch=batch,
-                                simulator=self.net, 
-                                metadata=self.net.metadata, 
-                                num_rollout_steps=self.num_rollout_steps,
-                                pbc=self.pbc, 
-                                device=self.net._device,
-                                active_metrics=self.active_metrics,
-                                u_vel=False,
-                                vis_config=self.visualize["vis_val"],
-                                trajectory_idx=self.trajectory_idx)
-
-            #MSE
-            for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
-                self.log(f"val/{k}", loss[k].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-                self.log(f"val/{k}std", loss[k].std(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-
-            self.log("val/loss", loss["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)
-            
-            #MAE
-            
-            #E_KIN
-            self.log("val/loss_ekin", loss["e_kin"]["mse"].mean(), prog_bar=True, on_epoch=True, batch_size=batch.batch_size)     
+            position_loss = loss
+            self.log("val/loss", position_loss["mse"].mean(), **kwargs_log)
+            # for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
+            #     self.log(f"val/{k}", position_loss[k].mean(), **kwargs_log)
+            #     self.log(f"val/{k}std", position_loss[k].std(), **kwargs_log)
+    
+        self.log("val/postion_loss", position_loss["mse"].mean(), **kwargs_log)
+        self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
 
         self.trajectory_idx += 1
         
@@ -225,37 +185,38 @@ class GNSLitModule(LightningModule):
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
         # Evaluate the trajectory rollout
-        if self.alpha_u != 0.0:
-            position_loss, u_vel_loss = eval_rollout(batch=batch,
-                                                        simulator=self.net,
-                                                        metadata=self.net.metadata, 
-                                                        num_rollout_steps=self.num_rollout_steps, 
-                                                        pbc=self.pbc,
-                                                        vel_solver=self.vel_solver,
-                                                        device=self.net._device,
-                                                        active_metrics=self.active_metrics,
-                                                        u_vel=True,
-                                                        vis_config=self.visualize["vis_test"],
-                                                        trajectory_idx=self.trajectory_idx)
+        self.validation_step(batch)
+        # if self.alpha_u != 0.0:
+        #     position_loss, u_vel_loss = eval_rollout(batch=batch,
+        #                                                 simulator=self.net,
+        #                                                 metadata=self.net.metadata, 
+        #                                                 num_rollout_steps=self.num_rollout_steps, 
+        #                                                 pbc=self.pbc,
+        #                                                 vel_solver=self.vel_solver,
+        #                                                 device=self.net._device,
+        #                                                 active_metrics=self.active_metrics,
+        #                                                 u_vel=True,
+        #                                                 vis_config=self.visualize["vis_test"],
+        #                                                 trajectory_idx=self.trajectory_idx)
                 
-            self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-            self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-            self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-            self.log("test/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size) #only shifting velocity currently
-        else:
-            loss = eval_rollout(batch=batch,
-                                simulator=self.net, 
-                                metadata=self.net.metadata, 
-                                num_rollout_steps=self.num_rollout_steps,
-                                pbc=self.pbc, 
-                                device=self.net._device,
-                                active_metrics=self.active_metrics,
-                                u_vel=False,
-                                vis_config=self.visualize["vis_test"],
-                                trajectory_idx=self.trajectory_idx)
-            self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+        #     self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+        #     self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+        #     self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
+        #     self.log("test/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size) #only shifting velocity currently
+        # else:
+        #     loss = eval_rollout(batch=batch,
+        #                         simulator=self.net, 
+        #                         metadata=self.net.metadata, 
+        #                         num_rollout_steps=self.num_rollout_steps,
+        #                         pbc=self.pbc, 
+        #                         device=self.net._device,
+        #                         active_metrics=self.active_metrics,
+        #                         u_vel=False,
+        #                         vis_config=self.visualize["vis_test"],
+        #                         trajectory_idx=self.trajectory_idx)
+        #     self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
         
-        self.trajectory_idx += 1
+        # self.trajectory_idx += 1
         
     def on_fit_start(self) -> None:
         self.net.set_metadata_device(self.net._device)    

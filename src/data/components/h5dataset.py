@@ -216,9 +216,9 @@ class H5Dataset(Dataset):
         # load and transpose the trajectory
         pos_input = torch.tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
         
-        particle_type = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
+        particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
         
-        position_dict = {"position": pos_input, "particle_type": particle_type}
+        position_dict = {"position": pos_input, "particle_types": particle_types}
         
         #if ds contains physical velocity target
         if "u" in traj:
@@ -249,9 +249,9 @@ class H5Dataset(Dataset):
         pos_input_and_target = traj_pos[el_idx : el_idx + self.subseq_length]
         pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))
 
-        particle_type = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
+        particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
         
-        position_dict = {"position": pos_input_and_target, "particle_type": particle_type}
+        position_dict = {"position": pos_input_and_target, "particle_types": particle_types}
         
         #if ds contains physical velocity target
         if "u" in traj:
@@ -280,14 +280,14 @@ class H5Dataset(Dataset):
                 enc_u=position_dict["u"][:, :self.input_seq_length],
                 target_u=position_dict["u"][:, self.input_seq_length:],
                 n_particles_per_trajectory=position_dict["position"].shape[0],
-                particle_type=position_dict["particle_type"]
+                particle_types=position_dict["particle_types"]
             )
         else:
             return Data(
             enc_pos=position_dict["position"][:, :self.input_seq_length],
             target_pos=position_dict["position"][:, self.input_seq_length:],
             n_particles_per_trajectory=position_dict["position"].shape[0],
-            particle_type=position_dict["particle_type"]
+            particle_types=position_dict["particle_types"]
             )
 
     def __len__(self):
