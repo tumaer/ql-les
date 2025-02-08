@@ -1,0 +1,10 @@
+#No pushforward
+_target_: src.data.sph_datamodule.SPHDataModule
+data_dir: ${paths.data_dir}/2D_KOLM_4096_200kevery1
+batch_size: 1
+num_workers: 0
+input_seq_length: ${vars.input_seq_length}
+max_rollout_steps: ${vars.num_rollout_steps}
+
+
+

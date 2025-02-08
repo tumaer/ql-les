@@ -1,10 +1,10 @@
-import copy
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing, radius_graph
-from src.utils.train_utils import wrap_displacement, wrap_position
-from src.utils.neighbor_search_algorithms import compute_connectivity_pbc #Alternative to radius_graph
+from src.utils.train_utils import wrap_displacement
 from src.utils.data_utils import load_metadata
+from src.utils.nbrs_utils import shift_fn, displ_fn, radius_graph_pbc
+from src.models.components.sph import relax_wrapper
 from pathlib import Path
 
 
@@ -35,47 +35,6 @@ def time_diff(input_sequence, boundaries, pbc=True):
     else:
         return input_sequence[:, 1:] - input_sequence[:, :-1]
 
-
-def pbc_duplication(most_recent_positions, n_particles_per_trajectory_combined, domain_size):
-    """
-    Apply periodic boundary condition duplication based on the specified PBC list.
-
-    Args:
-        most_recent_positions (torch.Tensor): Tensor of positions with shape [N, D].
-        domain_size (torch.Tensor): Tensor of domain size for each dimension with shape [D].
-        pbc (list of bool): List of boolean values indicating whether PBC should be applied for each dimension.
-
-    Returns:
-        torch.Tensor: Combined positions with periodic boundary duplication applied.
-    """
-    
-    D = most_recent_positions.size(1)  # Number of spatial dimensions
-    if D == 2:
-        pbc = [True, True]
-        n_particles_per_trajectory_combined *= 9
-
-    elif D == 3:
-        pbc = [True, True, True]
-        n_particles_per_trajectory_combined *= 27
-
-    # Create shifts based on pbc
-    shift_ranges = [
-        [-1, 0, 1] if p else [0] for p in pbc
-    ]
-    shifts = torch.cartesian_prod(*[torch.tensor(r) for r in shift_ranges]).float()
-    shifts = shifts[~torch.all(shifts == 0, dim=1)].to(most_recent_positions.device) # Exclude the center (original frame)
-
-    # Scale shifts by the domain size
-    shifts = (shifts * domain_size).to(most_recent_positions.device)
-
-    # Apply shifts to generate duplicated frames
-    duplicated_frames = torch.cat([
-        most_recent_positions + shift for shift in shifts
-    ], dim=0).to(most_recent_positions.device)  # Shape: [N * len(shifts), D]
-
-    # Combine original frame and duplicated frames
-    combined_positions = torch.cat([most_recent_positions, duplicated_frames], dim=0).to(most_recent_positions.device)
-    return combined_positions, n_particles_per_trajectory_combined
 
 def get_random_walk_noise_for_position_sequence(position_sequence, noise_std_last_step, boundaries, pbc=True):
     """Returns random-walk noise in the velocity applied to the position."""
@@ -325,6 +284,7 @@ class Simulator(nn.Module):
         self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
     
     def _norm(self, vel, key):
+        """From displacement of positions `v=x1-x0` to a normal distribution."""
         # key = "ua/uu/va/vv"
         kv, ka = key
         ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
@@ -333,6 +293,7 @@ class Simulator(nn.Module):
         return (vel - stats['mean']) / stats['std']
 
     def _denorm(self, vel, key):
+        """From a normal distribution to displacement of positions `v=x1-x0`."""
         kv, ka = key
         ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
     
@@ -340,16 +301,18 @@ class Simulator(nn.Module):
         return vel * stats['std'] + stats['mean']
         
     def shift_fn(self, r, dr):
-        if self._pbc:
-            return wrap_position(r + dr, self._boundaries)
-        else:
-            return r + dr
+        return shift_fn(r, dr, self._boundaries, self._pbc)
     
     def displ_fn(self, r1, r2):
-        if self._pbc:
-            return wrap_displacement(r1 - r2, self._boundaries)
-        else:
-            return r1 - r2
+        return displ_fn(r1, r2, self._boundaries, self._pbc)
+
+    def _u2v(self, u):
+        """Convert velocity `u` to displacement of positoins `v = x1 - x0 = dt * u`."""
+        return self._effective_dt * u
+    
+    def _v2u(self, v):
+        """Convert displacement of positoins `v` to velocity `u = (x1 - x0) / dt`."""
+        return v / self._effective_dt
 
     def forward(self):
         pass
@@ -430,24 +393,7 @@ class Simulator(nn.Module):
         return receivers, senders
     
     def _compute_connecitivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
-         #Default is 2 examples per batch
-         # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
-        n_particles_copy = copy.deepcopy(n_particles_per_trajectory)
-        combined_positions, n_particles_per_trajectory_combined = pbc_duplication(most_recent_position, n_particles_copy, self._boundaries)
-        batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory_combined)]).to(self._device)
-        edge_index = radius_graph(x=combined_positions, r=radius, batch=batch_ids, loop=add_self_edges)# (2, n_edges)
-        # Filter edges to only keep those where the source is in the original frame
-        original_frame_size = most_recent_position.size(0)
-        is_from_original = edge_index[0] < original_frame_size #Mask all particles not from the original frame
-        filtered_edge_index = edge_index[:, is_from_original]
-        # filtered_edge_index = filtered_edge_index[1, :] % frame_tensor.size(0)
-        filtered_edge_index = filtered_edge_index % most_recent_position.size(0)
-        sorted_receiver, order = filtered_edge_index[1,:].sort()
-        filtered_edge_index[1,:] = sorted_receiver
-        filtered_edge_index[0,:] = filtered_edge_index[0,:][order]
-        receivers = filtered_edge_index[0, :]
-        senders = filtered_edge_index[1, :]
-        return receivers, senders
+        return radius_graph_pbc(most_recent_position, n_particles_per_trajectory, radius, self._boundaries, add_self_edges)
     
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
         """
@@ -480,17 +426,39 @@ class Simulator(nn.Module):
             if vel_solver == "simple":
                 new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
                 new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
 
             elif vel_solver == "tvf":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
-                new_v_velocity = new_u_velocity * self._effective_dt + v_acceleration
+                new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
                 
             elif vel_solver == "neural_sph":
                 new_v_velocity = most_recent_v_velocity + v_acceleration
-                new_u_velocity = new_v_velocity / self._effective_dt + u_acceleration
+                new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
+                
+            elif vel_solver == "simple_u":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
-            new_position = self.shift_fn(most_recent_position, new_v_velocity)   
-            
+            elif vel_solver == "simple_u_closure":
+                au_sph = self._sph(most_recent_position, kwargs["n_part_per_traj"], most_recent_u_velocity)
+                # TODO: au_sph * dt 20x larger than the predicted one
+                new_u_velocity = most_recent_u_velocity + u_acceleration + au_sph * self._effective_dt
+                new_v_velocity = most_recent_v_velocity + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+                
+            elif vel_solver == "simple_rlx":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_pos_temp = self.shift_fn(
+                    most_recent_position, self._effective_dt * new_u_velocity
+                )
+                av_rlx, v_rlx, new_position = self._sph_rlx(
+                    new_pos_temp, kwargs["n_part_per_traj"]
+                )
+
             return new_position, new_u_velocity
         
         else:
@@ -498,6 +466,53 @@ class Simulator(nn.Module):
             new_position = self.shift_fn(most_recent_position, new_v_velocity)
             
         return new_position
+
+    def _sph_rlx(self, r, n_part_per_traj):
+        assert self.metadata["write_every"] == 1, (
+            "This relaxation is the exact same from dataset generation, iff no coarsening."
+        )
+
+        # Relax a point cloud using SPH without viscosity, but with transport vel.
+        if not hasattr(self, "_relax_fn"):
+            self._relax_fn = relax_wrapper(
+                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
+                dim=self.metadata["dim"],
+                L=self._boundaries[0].item(),
+                is_physical=True,
+                u_ref=self.metadata["u_ref"],
+                is_tvf=True,  # our relaxations always use tvf
+                nu=0.0,  # relaxations assume zero velocity, so this term drops
+                box=self._boundaries,
+            )
+
+        dt_factor = 2  # TODO: should be somehow passed from metadata.
+        a_v = 0.0
+        # r_input = r.detach().clone()
+        for _ in range(2):  # TODO: should be somehow passed from metadata.
+            a_temp = self._relax_fn(r, n_part_per_traj)
+            r = shift_fn(r, (dt_factor * self._effective_dt) ** 2 * a_temp)
+            a_v += a_temp * dt_factor**2
+
+        # following two lines are equivalent TODO: verify
+        # v = self.displ_fn(r, r_input) / self._effective_dt
+        v = 0.0 + self._effective_dt * a_v
+        return a_v, v, r  # in physical units
+
+    def _sph(self, r, n_part_per_traj, u):
+        # Compute NSE right hand side term.
+        if not hasattr(self, "_sph_fn"):
+            self._sph_fn = relax_wrapper(
+                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
+                dim=self.metadata["dim"],
+                L=self._boundaries[0].item(),
+                is_physical=True,
+                u_ref=self.metadata["u_ref"],
+                is_tvf=False,  # our relaxations always use tvf
+                nu=self.metadata["viscosity"],
+                box=self._boundaries,
+            )
+
+        return self._sph_fn(r, n_part_per_traj, u)
 
     def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
         if pbc:
@@ -508,7 +523,10 @@ class Simulator(nn.Module):
             vel_solver = kwargs["vel_solver"]
             node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
-            next_position, new_u_velocity = self._decoder_postprocessor(a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, vel_solver=vel_solver, u_velocity=u_velocity)
+            next_position, new_u_velocity = self._decoder_postprocessor(
+                a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, vel_solver=vel_solver, 
+                u_velocity=u_velocity, n_part_per_traj=n_particles_per_trajectory
+            )
             return next_position, new_u_velocity
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc)
@@ -526,9 +544,15 @@ class Simulator(nn.Module):
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
-            node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity
+            )
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
-            a_v_target, a_u_target = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc, next_u_velocity=next_u_velocity, u_velocity=u_velocity, vel_solver=kwargs["vel_solver"])
+            a_v_target, a_u_target = self._inverse_decoder_postprocessor(
+                next_position_adjusted, noisy_position_sequence, pbc, 
+                next_u_velocity=next_u_velocity, u_velocity=u_velocity, vel_solver=kwargs["vel_solver"],
+                n_part_per_traj=n_particles_per_trajectory
+            )
             
             return (a_v_pred, a_u_pred), (a_v_target, a_u_target)   
         else:
@@ -558,11 +582,25 @@ class Simulator(nn.Module):
 
             elif vel_solver == "tvf":
                 u_acceleration = next_u_velocity - previous_u_velocity
-                v_acceleration = next_v_velocity - next_u_velocity * self._effective_dt
+                v_acceleration = next_v_velocity - self._u2v(next_u_velocity)
                 
             elif vel_solver == "neural_sph":
                 v_acceleration = next_v_velocity - previous_v_velocity
-                u_acceleration = next_u_velocity - next_v_velocity / self._effective_dt
+                u_acceleration = next_u_velocity - self._v2u(next_v_velocity)
+
+            elif vel_solver == "simple_u":
+                u_acceleration = next_u_velocity - previous_u_velocity
+                v_acceleration = next_v_velocity - self._u2v(previous_u_velocity)
+                
+            elif vel_solver == "simple_u_closure":
+                au_sph = self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity)
+                # au_sph is 3x larger than difference in u's
+                u_acceleration = next_u_velocity - previous_u_velocity -  au_sph * self._effective_dt
+                v_acceleration = next_v_velocity - previous_v_velocity
+
+            elif vel_solver == "simple_rlx":
+                u_acceleration = next_u_velocity - previous_u_velocity
+                v_acceleration = torch.zeros_like(u_acceleration)                
 
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             u_normalized_acceleration = self._norm(u_acceleration, "ua")

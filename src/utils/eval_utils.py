@@ -16,7 +16,7 @@ def write_vtk(data_dict, path):
     except ImportError:
         raise ImportError("Please install pyvista to write VTK files.")
 
-    r = data_dict["r"].cpu().numpy()
+    r = data_dict["r"]
     N, dim = r.shape
 
     # PyVista treats the position information differently than the rest
@@ -32,9 +32,9 @@ def write_vtk(data_dict, path):
 
         # working in 3D or scalar features do not require special care
         if dim == 2 and v.ndim == 2:
-            v = np.hstack([v.cpu().numpy(), np.zeros((N, 1))])
+            v = np.hstack([v, np.zeros((N, 1))])
 
-        data_pv[k] = v.cpu().numpy()
+        data_pv[k] = v
 
     data_pv.save(path)
     
@@ -68,12 +68,16 @@ def pkl2vtk(src_path, dst_path=None):
             "r": rollout["predicted_rollout"][k],
             "tag": rollout["particle_type"],
         }
+        if "predicted_u_vel" in rollout:
+            state_vtk["u"] = rollout["predicted_u_vel"][k]
         write_vtk(state_vtk, f"{file_prefix}_{k}.vtk")
         # ground truth reference
         state_vtk = {
             "r": rollout["ground_truth_rollout"][k],
             "tag": rollout["particle_type"],
         }
+        if "ground_truth_u_vel" in rollout:
+            state_vtk["u"] = rollout["ground_truth_u_vel"][k]
         write_vtk(state_vtk, f"{file_prefix}_ref_{k}.vtk")
         
 def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:

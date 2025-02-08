@@ -4,7 +4,7 @@
 # python train.py experiment=gns_train_val_test_kolm2d
 defaults:
   - override /model: gns
-  - override /data: kolm2d
+  - override /data: kolm2d_every1
   - override /trainer: gpu
   - override /vars: kolm2d
   - override /callbacks: custom
@@ -40,8 +40,8 @@ model:
       rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
 
 trainer:
-  min_epochs: 0
-  max_epochs: 26  # on 2D KOLM with 19950 samples, this means 518k steps
+  min_epochs: null
+  max_epochs: null
   # gradient_clip_val: 0.5
   num_sanity_val_steps: 1 # before training starts
   log_every_n_steps: 1000
@@ -49,15 +49,18 @@ trainer:
   # limit_train_batches: 500  # train on this number of (sub-)trajectories
   # # the next two arguments run validation every N training steps, and should be used 
   # # with model_checkpoint: every_n_train_steps: 10_000
-  # check_val_every_n_epoch: null
-  # val_check_interval: 10_000
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: null
+  val_check_interval: 10_000
+callbacks:
+  model_checkpoint:
+    every_n_train_steps: 10_000
+
 
 tags: ["kolm", "gns"]
 
 logger:
   wandb:
-    project: "kolm2d"
+    project: "kolm2d_every1"
 
 seed: 12345
 

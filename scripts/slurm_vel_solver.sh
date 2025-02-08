@@ -2,22 +2,46 @@
 #SBATCH --job-name=vel_solvers
 #SBATCH --output=slogs/vel_solvers_%A_%a.out
 #SBATCH --error=slogs/vel_solvers_%A_%a.err
-#SBATCH --array=0-2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
 #SBATCH --gres=gpu:1
 
-# Create logs directory if it doesn't exist
-mkdir -p slogs
+if [ -z "$SLURM_JOB_ID" ]; then
+    echo "Warning: Running script outside of SLURM."
+else
+  # If using Slurm: create logs directory if it doesn't exist
+  mkdir -p slogs
+fi
 
-# Define the cases array
-cases=("simple" "tvf" "neural_sph")
+# Read command-line arguments and set default alpha_u if not provided
+CASE_NAME="$1"
+ALPHA_U="${2:-1.0}"  # can be specified as "1" or "1.0"
 
-# Get the current case based on array task ID
-case=${cases[$SLURM_ARRAY_TASK_ID]}
+# Check if case name is provided
+if [ -z "$CASE_NAME" ]; then
+  echo "Usage: sbatch scripts/slurm_vel_solver.sh <case_name> [alpha_u]"
+  exit 1
+fi
 
-# Launch with: sbatch scripts/slurm_vel_solver.sh
-echo "Running case: ${case}"
-python src/train.py experiment=gns_train_eval_2d_kolm.yaml \
-  +logger.wandb.name=koml2d_${case} model.alpha_u=1.0 model.vel_solver=${case}
+echo "Running case '${CASE_NAME}' with alpha_u=${ALPHA_U}"
+if (( $(echo "$ALPHA_U == 0.0" | bc -l) )); then
+  # If alpha_u == 0, fall back to predicting only acceleration for v
+  echo "Predicting only acceleration for v"
+  python src/train.py experiment=gns_kolm2d_every1.yaml model.alpha_u=${ALPHA_U} \
+    +logger.wandb.name=koml2d_${CASE_NAME} model.vel_solver=${CASE_NAME} \
+    model.net.node_in=26 model.net.node_out=2
+else
+  # If alpha_u != 0, predict both accelerations for u and v
+  echo "Predicting accelerations for u and v"
+  python src/train.py experiment=gns_kolm2d_every1.yaml model.alpha_u=${ALPHA_U} \
+    +logger.wandb.name=koml2d_${CASE_NAME} model.vel_solver=${CASE_NAME}
+fi
+
+# # Runs to start:
+# sbatch scripts/slurm_vel_solver.sh simple 0.0
+# sbatch scripts/slurm_vel_solver.sh simple 0.000001
+# sbatch scripts/slurm_vel_solver.sh simple
+# sbatch scripts/slurm_vel_solver.sh tvf
+# sbatch scripts/slurm_vel_solver.sh simple_u
+# sbatch scripts/slurm_vel_solver.sh simple_u_closure
