@@ -5,9 +5,9 @@ import torch
 from torch import Tensor
 from lightning import LightningModule
 from src.models.components.gns import get_random_walk_noise_for_position_sequence
-from src.utils.train_utils import (
-    pushforward_sample_steps, pushforward_fn, eval_rollout, particle_mse
-)
+from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
+from src.utils.metrics import particle_mse
+from src.utils.eval_utils import eval_rollout
 
 class GNSLitModule(LightningModule):
     """A LightningModule for training a Graph Network Simulator (GNS) model."""

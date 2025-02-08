@@ -36,13 +36,17 @@ def time_diff(input_sequence, boundaries, pbc=True):
         return input_sequence[:, 1:] - input_sequence[:, :-1]
 
 
-def get_random_walk_noise_for_position_sequence(position_sequence, noise_std_last_step, boundaries, pbc=True):
+def get_random_walk_noise_for_position_sequence(
+    position_sequence, noise_std_last_step, boundaries, pbc=True
+):
     """Returns random-walk noise in the velocity applied to the position."""
     velocity_sequence = time_diff(position_sequence, boundaries, pbc)
     
     num_velocities = velocity_sequence.shape[1]
     
-    velocity_sequence_noise = torch.randn(list(velocity_sequence.shape)) * (noise_std_last_step/num_velocities**0.5)
+    velocity_sequence_noise = torch.randn(list(velocity_sequence.shape)) * (
+        noise_std_last_step/num_velocities**0.5
+    )
     velocity_sequence_noise = torch.cumsum(velocity_sequence_noise, dim=1)
     
     position_sequence_noise = torch.cat([
@@ -321,7 +325,9 @@ class Simulator(nn.Module):
     def forward(self):
         pass
 
-    def _build_graph_from_raw(self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
+    def _build_graph_from_raw(
+        self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
+    ):
         n_total_points = position_sequence.shape[0]
         most_recent_position = position_sequence[:, -1] # (n_nodes, 2)
         v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
@@ -329,14 +335,14 @@ class Simulator(nn.Module):
         # senders and receivers are integers of shape (E,)
 
         if not pbc:
-            senders, receivers = self._compute_connectivity(most_recent_position, 
-                                                            n_particles_per_trajectory, 
-                                                            self._connectivity_radius)
+            senders, receivers = self._compute_connectivity(
+                most_recent_position, n_particles_per_trajectory, self._connectivity_radius
+            )
         elif pbc:
             #Pytorch Geometric Implementation
-            senders, receivers = self._compute_connecitivity_pbc_pyg(most_recent_position, 
-                                                            n_particles_per_trajectory, 
-                                                            self._connectivity_radius)
+            senders, receivers = self._compute_connecitivity_pbc_pyg(
+                most_recent_position, n_particles_per_trajectory, self._connectivity_radius
+            )
 
         node_features = []
         
@@ -523,15 +529,17 @@ class Simulator(nn.Module):
             
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
-            node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             next_position, new_u_velocity = self._decoder_postprocessor(
-                a_v_pred, current_positions, pbc, a_u_pred=a_u_pred, 
-                u_velocity=u_velocity, n_part_per_traj=n_particles_per_trajectory
+                a_v_pred, current_positions, pbc, 
+                a_u_pred=a_u_pred, u_velocity=u_velocity, n_part_per_traj=n_particles_per_trajectory
             )
             return next_position, new_u_velocity
         else:
-            node_features, edge_index, e_features = self._build_graph_from_raw(current_positions, n_particles_per_trajectory, particle_types, pbc)
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                current_positions, n_particles_per_trajectory, particle_types, pbc)
             predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
             next_position = self._decoder_postprocessor(predicted_normalized_acceleration, current_positions, pbc)
             return next_position
@@ -547,8 +555,7 @@ class Simulator(nn.Module):
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity
-            )
+                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             a_v_target, a_u_target = self._inverse_decoder_postprocessor(
                 next_position_adjusted, noisy_position_sequence, pbc, 
@@ -558,9 +565,11 @@ class Simulator(nn.Module):
             
             return (a_v_pred, a_u_pred), (a_v_target, a_u_target)   
         else:
-            node_features, edge_index, e_features = self._build_graph_from_raw(noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc)
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc)
             predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
-            target_nomralized_acceleration = self._inverse_decoder_postprocessor(next_position_adjusted, noisy_position_sequence, pbc)
+            target_nomralized_acceleration = self._inverse_decoder_postprocessor(
+                next_position_adjusted, noisy_position_sequence, pbc)
             
             return predicted_normalized_acceleration, target_nomralized_acceleration
          

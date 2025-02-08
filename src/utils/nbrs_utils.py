@@ -2,7 +2,6 @@ import copy
 import torch
 import numpy as np
 from torch_geometric.nn import radius_graph
-from src.utils.train_utils import wrap_displacement, wrap_position
 
 
 def pos_init_cartesian_2d(box_size: np.ndarray, dx: float):
@@ -24,6 +23,35 @@ def pos_init_cartesian_3d(box_size: np.ndarray, dx: float):
     grid = np.meshgrid(range(n[0]), range(n[1]), range(n[2]), indexing="xy")
     r = (np.vstack(list(map(np.ravel, grid))).T + 0.5) * dx
     return r
+
+
+def wrap_displacement(displacement, boundaries):
+    """
+    Wrap displacement to account for periodic boundary conditions.
+
+    Args:
+        displacement: Displacement tensor.
+        boundaries: Tensor containing boundary conditions.
+
+    Returns:
+        Wrapped displacement tensor.
+    """
+    #floating point percision messes up the results
+    return (displacement + 0.5 * boundaries) % boundaries - 0.5 * boundaries
+
+
+def wrap_position(position, boundaries):
+    """
+    Wrap position to account for periodic boundary conditions.
+
+    Args:
+        position: Position tensor.
+        boundaries: Tensor containing boundary conditions.
+
+    Returns:
+        Wrapped position tensor.
+    """
+    return position % boundaries
 
 
 def shift_fn(r, dr, box=None, pbc=False):
