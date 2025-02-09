@@ -51,6 +51,7 @@ trainer:
   # # with model_checkpoint: every_n_train_steps: 10_000
   check_val_every_n_epoch: null
   val_check_interval: 10_000
+  max_steps: 500_000
 callbacks:
   model_checkpoint:
     every_n_train_steps: 10_000
