@@ -464,9 +464,9 @@ class Simulator(nn.Module):
                 new_pos_temp = self.shift_fn(most_recent_position, self._u2v(new_u_velocity))
                 av_rlx, v_rlx, new_position = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
                 if self.metadata["write_every"] > 1:
-                    new_position = self.shift_fn(new_position, v_acceleration/self._effective_dt)
+                    new_position = self.shift_fn(new_position, v_acceleration)
                     # # equivalent to:
-                    # new_v_velocity = self._u2v(new_u_velocity) + av_rlx + v_acceleration/self._effective_dt
+                    # new_v_velocity = self._u2v(new_u_velocity) + av_rlx + v_acceleration
                     # new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             return new_position, new_u_velocity
@@ -498,7 +498,7 @@ class Simulator(nn.Module):
         # r_input = r.detach().clone()
         for _ in range(2):  # TODO: "2" should be somehow passed from metadata.
             a_temp = self._relax_fn(r, n_part_per_traj)
-            dr = (dt_factor * self._effective_dt) ** 2 * a_temp
+            dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
             r = shift_fn(r, dr)
             v += dr
 
@@ -702,25 +702,9 @@ class Simulator(nn.Module):
                 if self.metadata["write_every"] > 1:
                     new_pos_temp = self.shift_fn(previous_position, self._u2v(previous_u_velocity))
                     av_rlx, v_rlx, new_position_temp = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
-                    # TODO: the multiplication with self._effective_dt is a heuristic
-                    v_acceleration = self.displ_fn(next_position, new_position_temp) * self._effective_dt
-                    # v_acceleration = next_v_velocity - previous_v_velocity
-
-                    # v_acceleration1 = self.displ_fn(next_position, previous_position) * self._effective_dt
-                    # v_normalized_acceleration = self._norm(v_acceleration, "va")
-                    
-                    # a = self.displ_fn(next_position, new_position_temp)
-                    # v_t = self.displ_fn(next_position, previous_position)
-                    # au_t = u_acceleration
-
-                    # u1_min_u0 = next_u_velocity - previous_u_velocity
-                    # v1_min_u1 = next_v_velocity - self._u2v(next_u_velocity)
-                    # dr_rlx = v_rlx
-                    # print(cosine(u1_min_u0,v1_min_u1))
-                    # print(cosine(v1_min_u1,dr_rlx))
-                    
-                    # # equivalent to (if we didn't have the `*self._effective_dt` above and here):
-                    # v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity) - av_rlx*self._effective_dt)
+                    v_acceleration = self.displ_fn(next_position, new_position_temp)
+                    # # equivalent to:
+                    # v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity) - av_rlx).std()
                 else:
                     v_acceleration = torch.zeros_like(u_acceleration)                
 
