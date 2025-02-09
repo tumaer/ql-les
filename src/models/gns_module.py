@@ -125,6 +125,8 @@ class GNSLitModule(LightningModule):
             # Calculate MSE loss
             loss_v = particle_mse(a_v_pred, a_v_target, non_kinematic_mask)
             loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
+            self.log("train/loss_u", loss_u, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
+            self.log("train/loss_v", loss_v, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
 
             # Weighted combined loss
             loss = self.alpha_v * loss_v + self.alpha_u * loss_u

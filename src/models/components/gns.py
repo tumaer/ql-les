@@ -461,12 +461,13 @@ class Simulator(nn.Module):
                 
             elif self.vel_solver == "simple_rlx":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
-                new_pos_temp = self.shift_fn(
-                    most_recent_position, self._effective_dt * new_u_velocity
-                )
-                av_rlx, v_rlx, new_position = self._sph_rlx(
-                    new_pos_temp, kwargs["n_part_per_traj"]
-                )
+                new_pos_temp = self.shift_fn(most_recent_position, self._u2v(new_u_velocity))
+                av_rlx, v_rlx, new_position = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
+                if self.metadata["write_every"] > 1:
+                    new_position = self.shift_fn(new_position, v_acceleration/self._effective_dt)
+                    # # equivalent to:
+                    # new_v_velocity = self._u2v(new_u_velocity) + av_rlx + v_acceleration/self._effective_dt
+                    # new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             return new_position, new_u_velocity
         
@@ -477,9 +478,7 @@ class Simulator(nn.Module):
         return new_position
 
     def _sph_rlx(self, r, n_part_per_traj):
-        assert self.metadata["write_every"] == 1, (
-            "This relaxation is the exact same from dataset generation, iff no coarsening."
-        )
+        # This relaxation is the exact same from dataset generation, iff no coarsening."
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
         if not hasattr(self, "_relax_fn"):
@@ -494,18 +493,18 @@ class Simulator(nn.Module):
                 box=self._boundaries,
             )
 
-        dt_factor = 2  # TODO: should be somehow passed from metadata.
-        a_v = 0.0
+        dt_factor = 2  # TODO: "2" should be somehow passed from metadata.
+        v = 0.0
         # r_input = r.detach().clone()
-        for _ in range(2):  # TODO: should be somehow passed from metadata.
+        for _ in range(2):  # TODO: "2" should be somehow passed from metadata.
             a_temp = self._relax_fn(r, n_part_per_traj)
-            r = shift_fn(r, (dt_factor * self._effective_dt) ** 2 * a_temp)
-            a_v += a_temp * dt_factor**2
+            dr = (dt_factor * self._effective_dt) ** 2 * a_temp
+            r = shift_fn(r, dr)
+            v += dr
 
-        # The following two lines are equivalent for >=3 digits, start differing in 4th
-        # v = self.displ_fn(r, r_input) / self._effective_dt
-        v = 0.0 + self._effective_dt * a_v
-        return a_v, v, r  # in physical units
+        # The following line gives save v up to >3 digits
+        # v = self.displ_fn(r, r_input)  # v=x1-x0 as defined everywhere else in our code
+        return v, v, r
 
     def _sph(self, r, n_part_per_traj, u):
         # Compute NSE right hand side term.
@@ -608,98 +607,122 @@ class Simulator(nn.Module):
                 u_acceleration = next_u_velocity - previous_u_velocity -  au_sph * self._effective_dt
                 v_acceleration = next_v_velocity - previous_v_velocity
                 
-                ### Cosine similarity analysis
-                # import numpy as np
-                # def cosine(u, v, norm=True):
-                #     dot = (u*v).sum(dim=-1)
-                #     if norm:
-                #         norm_u = torch.linalg.norm(u, dim=-1)
-                #         norm_v = torch.linalg.norm(v, dim=-1)
-                #         dot /= (norm_u * norm_v)
-                #     return dot.mean()
-                # tuples = ((0.1, 1, False), (0.2, 1, False), (0.5, 1, False), (2, 1, False), (1, 0, False), (0, 1, False), (0, 0, True), (1, 1, False), (1, 1, True))  # (nu_p, nu, is_tvf) -> (0.01, )
-                # au_target = next_u_velocity - previous_u_velocity
+                """ Cosine similarity analysis
+                import numpy as np
+                def cosine(u, v, norm=True):
+                    dot = (u*v).sum(dim=-1)
+                    if norm:
+                        norm_u = torch.linalg.norm(u, dim=-1)
+                        norm_v = torch.linalg.norm(v, dim=-1)
+                        dot /= (norm_u * norm_v)
+                    return dot.mean()
+                tuples = ((0.1, 1, False), (0.2, 1, False), (0.5, 1, False), (2, 1, False), (1, 0, False), (0, 1, False), (0, 0, True), (1, 1, False), (1, 1, True))  # (nu_p, nu, is_tvf) -> (0.01, )
+                au_target = next_u_velocity - previous_u_velocity
 
-                # def eval_sph(t):
-                #     self._sph_fn = relax_wrapper(
-                #         Nx=int(round(previous_position.shape[0])**(1/self.metadata["dim"])),
-                #         dim=self.metadata["dim"],
-                #         L=self._boundaries[0].item(),
-                #         is_physical=True,
-                #         u_ref=self.metadata["u_ref"],
-                #         is_tvf=t[2],  # our relaxations always use tvf
-                #         nu=t[1],
-                #         box=self._boundaries,
-                #     )
-                #     return self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity, nu_p=t[0])
+                def eval_sph(t):
+                    self._sph_fn = relax_wrapper(
+                        Nx=int(round(previous_position.shape[0])**(1/self.metadata["dim"])),
+                        dim=self.metadata["dim"],
+                        L=self._boundaries[0].item(),
+                        is_physical=True,
+                        u_ref=self.metadata["u_ref"],
+                        is_tvf=t[2],  # our relaxations always use tvf
+                        nu=t[1],
+                        box=self._boundaries,
+                    )
+                    return self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity, nu_p=t[0])
 
-                # a = eval_sph((1, 0, False))
-                # b = eval_sph((0, 1, False))
-                # c = eval_sph((0, 0, True))
-                # # print(f"{cosine(a, b):.4f}", f"{cosine(a, c):.4f}", f"{cosine(b, c):.4f}")
-                # with open("cos_a_b.txt", "a") as f:
-                #     f.write(f"{cosine(a, b):.6f}\n")
-                # with open("cos_a_c.txt", "a") as f:
-                #     f.write(f"{cosine(a, c):.6f}\n")
-                # with open("cos_b_c.txt", "a") as f:
-                #     f.write(f"{cosine(b, c):.6f}\n")
+                a = eval_sph((1, 0, False))
+                b = eval_sph((0, 1, False))
+                c = eval_sph((0, 0, True))
+                # print(f"{cosine(a, b):.4f}", f"{cosine(a, c):.4f}", f"{cosine(b, c):.4f}")
+                with open("cos_a_b.txt", "a") as f:
+                    f.write(f"{cosine(a, b):.6f}\n")
+                with open("cos_a_c.txt", "a") as f:
+                    f.write(f"{cosine(a, c):.6f}\n")
+                with open("cos_b_c.txt", "a") as f:
+                    f.write(f"{cosine(b, c):.6f}\n")
 
-                # # au_target /= au_target.std()
-                # for t in tuples:
-                #     lst = []
-                #     for scale in [0.0, 0.001, 0.002, 0.003, 0.01, 0.03]:
-                #         au_sph = eval_sph(t)
-                #         # au_sph /= au_sph.std()
-                #         u_acceleration = next_u_velocity - previous_u_velocity - au_sph * self._effective_dt * scale
-                #         lst.append(f"{u_acceleration.std():.6f}")
+                # au_target /= au_target.std()
+                for t in tuples:
+                    lst = []
+                    for scale in [0.0, 0.001, 0.002, 0.003, 0.01, 0.03]:
+                        au_sph = eval_sph(t)
+                        # au_sph /= au_sph.std()
+                        u_acceleration = next_u_velocity - previous_u_velocity - au_sph * self._effective_dt * scale
+                        lst.append(f"{u_acceleration.std():.6f}")
                     
-                #     # Write u_acceleration.std() by appending to a file named target_std_{t[0]}_{t[1]}_{t[2]}.txt
-                #     cos = cosine(au_sph, au_target, norm=True).item()
-                #     with open(f"cos_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
-                #         f.write(f"{cos:.6f}\n")
-                #     # print(t, f"{cos:4f}", lst, np.argmin(lst))
-                #     # Write np.argmin(lst) to a file named scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt
-                #     with open(f"scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
-                #         f.write(f"{np.argmin(lst)}\n")
-                # # print("#############################################")
-                # # import os
-                # # for prefix in ['cos', 'scale_argmin']:
-                # #     target_files = [f for f in os.listdir('.') if f.startswith(prefix) and f.endswith('.txt')]
-                # #     target_files.sort()
-                # #     for target_file in target_files:
-                # #         inner_list = []
-                # #         with open(target_file, 'r') as f:
-                # #             for line in f:
-                # #                 inner_list.append(float(line.strip()))
-                # #         print(f"{target_file:<30} {len(inner_list):<10} {np.array(inner_list).mean():<10.4f}")
-                # #     print("#"*50)
+                    # Write u_acceleration.std() by appending to a file named target_std_{t[0]}_{t[1]}_{t[2]}.txt
+                    cos = cosine(au_sph, au_target, norm=True).item()
+                    with open(f"cos_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
+                        f.write(f"{cos:.6f}\n")
+                    # print(t, f"{cos:4f}", lst, np.argmin(lst))
+                    # Write np.argmin(lst) to a file named scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt
+                    with open(f"scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
+                        f.write(f"{np.argmin(lst)}\n")
+                # print("#############################################")
+                # import os
+                # for prefix in ['cos', 'scale_argmin']:
+                #     target_files = [f for f in os.listdir('.') if f.startswith(prefix) and f.endswith('.txt')]
+                #     target_files.sort()
+                #     for target_file in target_files:
+                #         inner_list = []
+                #         with open(target_file, 'r') as f:
+                #             for line in f:
+                #                 inner_list.append(float(line.strip()))
+                #         print(f"{target_file:<30} {len(inner_list):<10} {np.array(inner_list).mean():<10.4f}")
+                #     print("#"*50)
 
-                # cos_0.1_1_False.txt            1005       0.0244    
-                # cos_0.2_1_False.txt            1005       0.0187    
-                # cos_0.5_1_False.txt            1005       0.0105    
-                # cos_0_0_True.txt               1004       0.0332    
-                # cos_0_1_False.txt              1005       0.0346    
-                # cos_1_0_False.txt              1005       -0.0111   
-                # cos_1_1_False.txt              1004       0.0041    
-                # cos_1_1_True.txt               1004       0.0380    
-                # cos_2_1_False.txt              1005       -0.0014   
-                # cos_a_b.txt                    1005       0.0161    
-                # cos_a_c.txt                    1005       -0.5016   
-                # cos_b_c.txt                    1005       0.1257    
-                # ##################################################
-                # scale_argmin_0.1_1_False.txt   1005       0.3562    
-                # scale_argmin_0.2_1_False.txt   1005       0.4010    
-                # scale_argmin_0.5_1_False.txt   1005       0.4418    
-                # scale_argmin_0_0_True.txt      1004       2.0976    
-                # scale_argmin_0_1_False.txt     1005       0.3841    
-                # scale_argmin_1_0_False.txt     1005       0.3015    
-                # scale_argmin_1_1_False.txt     1004       0.3685    
-                # scale_argmin_1_1_True.txt      1004       2.3386    
-                # scale_argmin_2_1_False.txt     1005       0.2905   
+                cos_0.1_1_False.txt            1005       0.0244    
+                cos_0.2_1_False.txt            1005       0.0187    
+                cos_0.5_1_False.txt            1005       0.0105    
+                cos_0_0_True.txt               1004       0.0332    
+                cos_0_1_False.txt              1005       0.0346    
+                cos_1_0_False.txt              1005       -0.0111   
+                cos_1_1_False.txt              1004       0.0041    
+                cos_1_1_True.txt               1004       0.0380    
+                cos_2_1_False.txt              1005       -0.0014   
+                cos_a_b.txt                    1005       0.0161    
+                cos_a_c.txt                    1005       -0.5016   
+                cos_b_c.txt                    1005       0.1257    
+                ##################################################
+                scale_argmin_0.1_1_False.txt   1005       0.3562    
+                scale_argmin_0.2_1_False.txt   1005       0.4010    
+                scale_argmin_0.5_1_False.txt   1005       0.4418    
+                scale_argmin_0_0_True.txt      1004       2.0976    
+                scale_argmin_0_1_False.txt     1005       0.3841    
+                scale_argmin_1_0_False.txt     1005       0.3015    
+                scale_argmin_1_1_False.txt     1004       0.3685    
+                scale_argmin_1_1_True.txt      1004       2.3386    
+                scale_argmin_2_1_False.txt     1005       0.2905   
+                """
 
             elif self.vel_solver == "simple_rlx":
                 u_acceleration = next_u_velocity - previous_u_velocity
-                v_acceleration = torch.zeros_like(u_acceleration)                
+                if self.metadata["write_every"] > 1:
+                    new_pos_temp = self.shift_fn(previous_position, self._u2v(previous_u_velocity))
+                    av_rlx, v_rlx, new_position_temp = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
+                    # TODO: the multiplication with self._effective_dt is a heuristic
+                    v_acceleration = self.displ_fn(next_position, new_position_temp) * self._effective_dt
+                    # v_acceleration = next_v_velocity - previous_v_velocity
+
+                    # v_acceleration1 = self.displ_fn(next_position, previous_position) * self._effective_dt
+                    # v_normalized_acceleration = self._norm(v_acceleration, "va")
+                    
+                    # a = self.displ_fn(next_position, new_position_temp)
+                    # v_t = self.displ_fn(next_position, previous_position)
+                    # au_t = u_acceleration
+
+                    # u1_min_u0 = next_u_velocity - previous_u_velocity
+                    # v1_min_u1 = next_v_velocity - self._u2v(next_u_velocity)
+                    # dr_rlx = v_rlx
+                    # print(cosine(u1_min_u0,v1_min_u1))
+                    # print(cosine(v1_min_u1,dr_rlx))
+                    
+                    # # equivalent to (if we didn't have the `*self._effective_dt` above and here):
+                    # v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity) - av_rlx*self._effective_dt)
+                else:
+                    v_acceleration = torch.zeros_like(u_acceleration)                
 
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             u_normalized_acceleration = self._norm(u_acceleration, "ua")
