@@ -502,7 +502,7 @@ class Simulator(nn.Module):
             r = shift_fn(r, (dt_factor * self._effective_dt) ** 2 * a_temp)
             a_v += a_temp * dt_factor**2
 
-        # following two lines are equivalent TODO: verify
+        # The following two lines are equivalent for >=3 digits, start differing in 4th
         # v = self.displ_fn(r, r_input) / self._effective_dt
         v = 0.0 + self._effective_dt * a_v
         return a_v, v, r  # in physical units
@@ -520,7 +520,7 @@ class Simulator(nn.Module):
                 nu=self.metadata["viscosity"],
                 box=self._boundaries,
             )
-
+        # pressure term std: 53; viscous term std: 0.059; tvf std: 90
         return self._sph_fn(r, n_part_per_traj, u)
 
     def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
@@ -607,6 +607,95 @@ class Simulator(nn.Module):
                 # au_sph is 3x larger than difference in u's
                 u_acceleration = next_u_velocity - previous_u_velocity -  au_sph * self._effective_dt
                 v_acceleration = next_v_velocity - previous_v_velocity
+                
+                ### Cosine similarity analysis
+                # import numpy as np
+                # def cosine(u, v, norm=True):
+                #     dot = (u*v).sum(dim=-1)
+                #     if norm:
+                #         norm_u = torch.linalg.norm(u, dim=-1)
+                #         norm_v = torch.linalg.norm(v, dim=-1)
+                #         dot /= (norm_u * norm_v)
+                #     return dot.mean()
+                # tuples = ((0.1, 1, False), (0.2, 1, False), (0.5, 1, False), (2, 1, False), (1, 0, False), (0, 1, False), (0, 0, True), (1, 1, False), (1, 1, True))  # (nu_p, nu, is_tvf) -> (0.01, )
+                # au_target = next_u_velocity - previous_u_velocity
+
+                # def eval_sph(t):
+                #     self._sph_fn = relax_wrapper(
+                #         Nx=int(round(previous_position.shape[0])**(1/self.metadata["dim"])),
+                #         dim=self.metadata["dim"],
+                #         L=self._boundaries[0].item(),
+                #         is_physical=True,
+                #         u_ref=self.metadata["u_ref"],
+                #         is_tvf=t[2],  # our relaxations always use tvf
+                #         nu=t[1],
+                #         box=self._boundaries,
+                #     )
+                #     return self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity, nu_p=t[0])
+
+                # a = eval_sph((1, 0, False))
+                # b = eval_sph((0, 1, False))
+                # c = eval_sph((0, 0, True))
+                # # print(f"{cosine(a, b):.4f}", f"{cosine(a, c):.4f}", f"{cosine(b, c):.4f}")
+                # with open("cos_a_b.txt", "a") as f:
+                #     f.write(f"{cosine(a, b):.6f}\n")
+                # with open("cos_a_c.txt", "a") as f:
+                #     f.write(f"{cosine(a, c):.6f}\n")
+                # with open("cos_b_c.txt", "a") as f:
+                #     f.write(f"{cosine(b, c):.6f}\n")
+
+                # # au_target /= au_target.std()
+                # for t in tuples:
+                #     lst = []
+                #     for scale in [0.0, 0.001, 0.002, 0.003, 0.01, 0.03]:
+                #         au_sph = eval_sph(t)
+                #         # au_sph /= au_sph.std()
+                #         u_acceleration = next_u_velocity - previous_u_velocity - au_sph * self._effective_dt * scale
+                #         lst.append(f"{u_acceleration.std():.6f}")
+                    
+                #     # Write u_acceleration.std() by appending to a file named target_std_{t[0]}_{t[1]}_{t[2]}.txt
+                #     cos = cosine(au_sph, au_target, norm=True).item()
+                #     with open(f"cos_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
+                #         f.write(f"{cos:.6f}\n")
+                #     # print(t, f"{cos:4f}", lst, np.argmin(lst))
+                #     # Write np.argmin(lst) to a file named scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt
+                #     with open(f"scale_argmin_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
+                #         f.write(f"{np.argmin(lst)}\n")
+                # # print("#############################################")
+                # # import os
+                # # for prefix in ['cos', 'scale_argmin']:
+                # #     target_files = [f for f in os.listdir('.') if f.startswith(prefix) and f.endswith('.txt')]
+                # #     target_files.sort()
+                # #     for target_file in target_files:
+                # #         inner_list = []
+                # #         with open(target_file, 'r') as f:
+                # #             for line in f:
+                # #                 inner_list.append(float(line.strip()))
+                # #         print(f"{target_file:<30} {len(inner_list):<10} {np.array(inner_list).mean():<10.4f}")
+                # #     print("#"*50)
+
+                # cos_0.1_1_False.txt            1005       0.0244    
+                # cos_0.2_1_False.txt            1005       0.0187    
+                # cos_0.5_1_False.txt            1005       0.0105    
+                # cos_0_0_True.txt               1004       0.0332    
+                # cos_0_1_False.txt              1005       0.0346    
+                # cos_1_0_False.txt              1005       -0.0111   
+                # cos_1_1_False.txt              1004       0.0041    
+                # cos_1_1_True.txt               1004       0.0380    
+                # cos_2_1_False.txt              1005       -0.0014   
+                # cos_a_b.txt                    1005       0.0161    
+                # cos_a_c.txt                    1005       -0.5016   
+                # cos_b_c.txt                    1005       0.1257    
+                # ##################################################
+                # scale_argmin_0.1_1_False.txt   1005       0.3562    
+                # scale_argmin_0.2_1_False.txt   1005       0.4010    
+                # scale_argmin_0.5_1_False.txt   1005       0.4418    
+                # scale_argmin_0_0_True.txt      1004       2.0976    
+                # scale_argmin_0_1_False.txt     1005       0.3841    
+                # scale_argmin_1_0_False.txt     1005       0.3015    
+                # scale_argmin_1_1_False.txt     1004       0.3685    
+                # scale_argmin_1_1_True.txt      1004       2.3386    
+                # scale_argmin_2_1_False.txt     1005       0.2905   
 
             elif self.vel_solver == "simple_rlx":
                 u_acceleration = next_u_velocity - previous_u_velocity

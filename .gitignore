@@ -159,3 +159,4 @@ configs/local/default.yaml
 *.DS_Store
 outputs/
 slogs/
+data*/

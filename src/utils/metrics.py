@@ -4,8 +4,9 @@ from typing import List, Dict, Optional, Union
 from src.utils.nbrs_utils import wrap_displacement
 
 
-def comupte_metrics(
-    predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False
+def compute_metrics(
+    predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False, 
+    simulator=None
 ):
     """
     Compute metrics for the given predictions and targets.
@@ -22,17 +23,61 @@ def comupte_metrics(
     Returns:
         Dictionary containing computed metrics.
     """
+    
+    ### Explore MSE(pos) vs MSE(vel) ###
+    ### Results: MSE(pos) accumulates much harder and we cannot compare with MSE(u)
+    ### Results: We choose to work with MSE(v)
+    # v_p = (x1_p - x0_p)/norm_v
+    # v_t = (x1_t- x0_t)/norm_v
+    # mse_v = (v_p - v_t)**2
+    #       = (x1_p - x0_p - x1_t + x0_t)**2/norm_v**2
+    #       = ((x1_p - x1_t) - (x0_p - x0_t))**2/norm_v**2
+    #       = mse_p/norm_v**2 * norm_p**2 - 2 (x1_p - x1_t)(x0_p - x0_t)/norm_v**2
+    # 
+    # dx0 = (x0_p - x0_t)/norm_p
+    # mse_p1 = (dx0)**2
+    # dx1 = (x1_p - x1_t)/norm_p
+    # mse_p1 = (dx1)**2
+    # mse_p = dx0**2 + dx1**2
+    #       = (x0_p - x0_t)**2/norm_p**2 + (x1_p - x1_t)**2/norm_p**2
+    #
+    # v_p = wrap_displacement((predictions[1:] - predictions[:-1]), boundaries)
+    # v_t = wrap_displacement((targets[1:] - targets[:-1]), boundaries)
+    # mse_v = (simulator._norm(v_p - v_t, "vv")**2).mean(dim=(1, 2))
+    #
+    # dx0 = wrap_displacement((predictions - targets), boundaries)
+    # mse_p = (simulator._norm(dx0, "vv")**2).mean(dim=(1, 2))
+    #
+    # print(mse_v)
+    # print(mse_p)
+    # import matplotlib.pyplot as plt
+    # fig = plt.figure()
+    # plt.plot(mse_v.detach().cpu(), label="mse_v")
+    # plt.plot(mse_p.detach().cpu(), label="mse_p")
+    # plt.legend()
+    # # log y
+    # plt.yscale("log")
+    # plt.grid()
+    # plt.savefig("mse_v_p.png")
+
+    v_p = wrap_displacement((predictions[1:] - predictions[:-1]), boundaries)
+    v_t = wrap_displacement((targets[1:] - targets[:-1]), boundaries)
+    v_diff = v_p - v_t
+    is_norm = True
+    if is_norm:
+        v_diff = simulator._norm(v_diff, "vv")
+
     computed_metrics = {}
     loss_ranges = [1, 5, 10, 20, 50, 100]
     for metric_name in active_metrics:
         if metric_name == "mse":
-            loss = (wrap_displacement((predictions - targets), boundaries) **2)
+            loss = (v_diff **2)
             computed_metrics["mse"] = loss.mean(dim=(1, 2))
             for t in loss_ranges:
                 if t < predictions.shape[0]:  # Ensure valid range
                     computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
         elif metric_name == "mae":
-            loss = torch.abs(wrap_displacement((predictions - targets), boundaries))
+            loss = torch.abs(v_diff)
             computed_metrics["mae"] = loss.mean(dim=(1, 2))
             for t in loss_ranges:
                 if t < predictions.shape[0]: 

@@ -8,7 +8,7 @@ from omegaconf import DictConfig
 from lightning.pytorch.loggers import WandbLogger, Logger
 from typing import List
 
-from src.utils.metrics import comupte_metrics
+from src.utils.metrics import compute_metrics
 
 
 def eval_rollout(
@@ -130,9 +130,11 @@ def eval_single_rollout(
         
         trajectory_rollout = position_predictions
         
-        computed_metrics = comupte_metrics(
+        is_norm = True  # compute the metrics in normalized space
+        kwargs = {"simulator": simulator} if is_norm else {}
+        computed_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc
+            features["bounds"], pbc=pbc, **kwargs
         )
                 
         return computed_metrics, trajectory_rollout, ground_truth_positions
@@ -166,12 +168,32 @@ def eval_single_rollout(
         trajectory_rollout = position_predictions
         u_vel_rollout = u_vel_predictions
     
-        computed_position_metrics = comupte_metrics(
+        is_norm = True  # compute the metrics in normalized space
+        if is_norm:
+            u_diff = simulator._norm(u_vel_predictions - ground_truth_u_velocity, "uu")
+            kwargs = {"simulator": simulator}
+        else:
+            u_diff = u_vel_predictions - ground_truth_u_velocity
+            kwargs = {}
+            
+        computed_position_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, u_vel=True
+            features["bounds"], pbc=pbc, u_vel=True, **kwargs
         )
-        #TODO: discuss metrics for u_vel
-        computed_vel_metrics = ((u_vel_predictions - ground_truth_u_velocity) ** 2).mean(dim=(1, 2))
+        # print(computed_position_metrics["mse"])
+        computed_vel_metrics = (u_diff ** 2).mean(dim=(1, 2))
+        # print(computed_vel_metrics)
+        # import matplotlib.pyplot as plt
+        # fig = plt.figure()
+        # plt.plot(computed_position_metrics["mse"].detach().cpu(), label="mse_v")
+        # plt.plot(computed_vel_metrics.detach().cpu(), label="mse_u")
+        # plt.legend()
+        # # log y
+        # plt.yscale("log")
+        # plt.title(f"{computed_position_metrics["mse"].mean().item():.4f}, {computed_vel_metrics.mean().item():.4f}")
+        # plt.grid()
+        # plt.savefig("mse_v_u.png")
+
         return (
             (computed_position_metrics, computed_vel_metrics),
             (trajectory_rollout, u_vel_rollout),
