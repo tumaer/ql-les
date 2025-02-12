@@ -207,7 +207,7 @@ class H5Dataset(Dataset):
         else:
             traj_idx = idx
             slice_from = 0
-            slice_to = self.sequence_length
+            slice_to = self.subseq_length
 
         # get a pointer to the trajectory. That is not yet the real trajectory.
         traj = self.db_hdf5[f"{self.traj_keys[traj_idx]}"]

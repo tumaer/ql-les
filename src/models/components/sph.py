@@ -112,7 +112,7 @@ def relax_wrapper(
     def denormalize_length(r):
         return r * l_ref
 
-    def loop_body(r, n_part_per_traj, u=None):
+    def loop_body(r, n_part_per_traj, u=None, verbose=False):
         if nu != 0.0:
             assert (u is not None) and (r.shape==u.shape), "If nu!=0, u needed."
 
@@ -132,7 +132,8 @@ def relax_wrapper(
 
         rho = mass * scatter_add(w_dist, i_s, dim=0, dim_size=N_tot)
         p = eos.p_fn(rho)
-        # print(f"Density min/max/std: {rho.min().item():.4f}, {rho.max().item():.4f}, {rho.std().item():.4f}")
+        if verbose:
+            print(f"Density min/max/std: {rho.min().item():.4f}, {rho.max().item():.4f}, {rho.std().item():.4f}")
         
         def acceleration_fn(r_ij, d_ij, rho_i, rho_j, p_i, p_j, u_i=None, u_j=None):
             # Compute unit vector, above eq. (6), Zhang (2017). Sign flipped here.

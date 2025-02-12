@@ -22,6 +22,7 @@ class GNSLitModule(LightningModule):
         compile: bool = False,
         seed: int = 0,
         pushforward: Dict[str, Any] = None,
+        neuralsph: Dict[str, Any] = None,
         num_rollout_steps: int = 1,
         pbc: bool = True,
         vel_solver: str = "simple",
@@ -43,7 +44,8 @@ class GNSLitModule(LightningModule):
         self.save_hyperparameters(logger=False, ignore=['net'])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.pbc = pbc
-        
+        self.neuralsph = neuralsph
+
         # Loss weights
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
@@ -147,10 +149,12 @@ class GNSLitModule(LightningModule):
     def on_validation_start(self) -> None:
         self.trajectory_idx = 0
     
-    def validation_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
+    def validation_step(self, batch: Tuple[Tensor, Tensor], **kwargs) -> Dict[str, Tensor]:
         """Perform a single validation step, using the forward method to infer positions."""
         #ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
+        split = "test" if (("testing" in kwargs) and kwargs["testing"]) else "val"
+        self.net.neuralsph=self.neuralsph[split]
         loss = eval_rollout(
             batch=batch,
             simulator=self.net, 
@@ -159,7 +163,7 @@ class GNSLitModule(LightningModule):
             pbc=self.pbc, 
             device=self.net._device,
             active_metrics=self.active_metrics,
-            vis_config=self.visualize["vis_val"],
+            vis_config=self.visualize[f"vis_{split}"],
             trajectory_idx=self.trajectory_idx,
             u_vel=True if self.alpha_u != 0.0 else False
         )
@@ -167,17 +171,17 @@ class GNSLitModule(LightningModule):
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         if self.alpha_u != 0.0:
             position_loss, u_vel_loss = loss
-            self.log("val/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)  # TODO: different scales!!! Don't just add them
-            self.log("val/u_velocity_loss", u_vel_loss.mean(), **kwargs_log)
+            self.log(f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)
+            self.log(f"{split}/u_velocity_loss", u_vel_loss.mean(), **kwargs_log)
         else:
             position_loss = loss
-            self.log("val/loss", position_loss["mse"].mean(), **kwargs_log)
+            self.log(f"{split}/loss", position_loss["mse"].mean(), **kwargs_log)
             # for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
             #     self.log(f"val/{k}", position_loss[k].mean(), **kwargs_log)
             #     self.log(f"val/{k}std", position_loss[k].std(), **kwargs_log)
     
-        self.log("val/postion_loss", position_loss["mse"].mean(), **kwargs_log)
-        self.log("val/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
+        self.log(f"{split}/postion_loss", position_loss["mse"].mean(), **kwargs_log)
+        self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
 
         self.trajectory_idx += 1
         
@@ -187,38 +191,7 @@ class GNSLitModule(LightningModule):
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
         # Evaluate the trajectory rollout
-        self.validation_step(batch)
-        # if self.alpha_u != 0.0:
-        #     position_loss, u_vel_loss = eval_rollout(batch=batch,
-        #                                                 simulator=self.net,
-        #                                                 metadata=self.net.metadata, 
-        #                                                 num_rollout_steps=self.num_rollout_steps, 
-        #                                                 pbc=self.pbc,
-        #                                                 vel_solver=self.vel_solver,
-        #                                                 device=self.net._device,
-        #                                                 active_metrics=self.active_metrics,
-        #                                                 u_vel=True,
-        #                                                 vis_config=self.visualize["vis_test"],
-        #                                                 trajectory_idx=self.trajectory_idx)
-                
-        #     self.log("test/postion_loss", position_loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-        #     self.log("test/u_velocity_loss", u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-        #     self.log("test/loss", position_loss["mse"].mean() + u_vel_loss.mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-        #     self.log("test/loss_ekin", position_loss["e_kin"]["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size) #only shifting velocity currently
-        # else:
-        #     loss = eval_rollout(batch=batch,
-        #                         simulator=self.net, 
-        #                         metadata=self.net.metadata, 
-        #                         num_rollout_steps=self.num_rollout_steps,
-        #                         pbc=self.pbc, 
-        #                         device=self.net._device,
-        #                         active_metrics=self.active_metrics,
-        #                         u_vel=False,
-        #                         vis_config=self.visualize["vis_test"],
-        #                         trajectory_idx=self.trajectory_idx)
-        #     self.log("test/loss", loss["mse"].mean(), prog_bar=True, on_step=True, batch_size=batch.batch_size)
-        
-        # self.trajectory_idx += 1
+        self.validation_step(batch, testing=True)
         
     def on_fit_start(self) -> None:
         self.net.set_metadata_device(self.net._device)    

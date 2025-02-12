@@ -250,7 +250,6 @@ class Simulator(nn.Module):
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
             alpha_u=alpha_u
-        
         )
         
     def set_metadata_device(self, device=None):
@@ -417,7 +416,8 @@ class Simulator(nn.Module):
         Returns:
             Tensor: New positions wrapped within the boundaries.
         """
-        
+        assert hasattr(self, "neuralsph"), "neuralsph must be defined in the model."
+
         # The model produces the output in normalized space so we apply inverse normalization.
         v_acceleration = self._denorm(a_v_pred, "va")
         
@@ -462,12 +462,27 @@ class Simulator(nn.Module):
             elif self.vel_solver == "simple_rlx":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_pos_temp = self.shift_fn(most_recent_position, self._u2v(new_u_velocity))
-                av_rlx, v_rlx, new_position = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
+                av_rlx, v_rlx, new_position = self._sph_rlx(
+                    new_pos_temp, 
+                    kwargs["n_part_per_traj"], 
+                    is_tvf=self.metadata["rlx_is_tvf"],
+                    dt_factor=self.metadata["rlx_dt_factor"],
+                    num_steps=self.metadata["rlx_num_steps"]
+                )
                 if self.metadata["write_every"] > 1:
                     new_position = self.shift_fn(new_position, v_acceleration)
                     # # equivalent to:
                     # new_v_velocity = self._u2v(new_u_velocity) + av_rlx + v_acceleration
                     # new_position = self.shift_fn(most_recent_position, new_v_velocity)
+
+            if self.neuralsph["num_steps"] > 0:
+                _, _, new_position = self._sph_rlx(
+                    new_position, 
+                    kwargs["n_part_per_traj"], 
+                    is_tvf=self.neuralsph["is_tvf"], 
+                    dt_factor=self.neuralsph["dt_factor"], 
+                    num_steps=self.neuralsph["num_steps"]
+                )
 
             return new_position, new_u_velocity
         
@@ -475,9 +490,17 @@ class Simulator(nn.Module):
             new_v_velocity = most_recent_v_velocity + v_acceleration
             new_position = self.shift_fn(most_recent_position, new_v_velocity)
             
+            if self.neuralsph["num_steps"] > 0:
+                _, _, new_position = self._sph_rlx(
+                    new_position, 
+                    kwargs["n_part_per_traj"], 
+                    is_tvf=self.neuralsph["is_tvf"], 
+                    dt_factor=self.neuralsph["dt_factor"], 
+                    num_steps=self.neuralsph["num_steps"]
+                )
         return new_position
 
-    def _sph_rlx(self, r, n_part_per_traj):
+    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps):
         # This relaxation is the exact same from dataset generation, iff no coarsening."
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
@@ -488,21 +511,21 @@ class Simulator(nn.Module):
                 L=self._boundaries[0].item(),
                 is_physical=True,
                 u_ref=self.metadata["u_ref"],
-                is_tvf=True,  # our relaxations always use tvf
+                is_tvf=is_tvf,  # our relaxations always use tvf
                 nu=0.0,  # relaxations assume zero velocity, so this term drops
                 box=self._boundaries,
             )
 
-        dt_factor = 2  # TODO: "2" should be somehow passed from metadata.
+        dt_factor = dt_factor
         v = 0.0
         # r_input = r.detach().clone()
-        for _ in range(2):  # TODO: "2" should be somehow passed from metadata.
-            a_temp = self._relax_fn(r, n_part_per_traj)
+        for i in range(num_steps):
+            a_temp = self._relax_fn(r, n_part_per_traj) #, verbose=True if (i==num_steps-1) else False)
             dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
             r = shift_fn(r, dr)
             v += dr
 
-        # The following line gives save v up to >3 digits
+        # The following line gives the same v up to >3 digits
         # v = self.displ_fn(r, r_input)  # v=x1-x0 as defined everywhere else in our code
         return v, v, r
 
@@ -701,7 +724,13 @@ class Simulator(nn.Module):
                 u_acceleration = next_u_velocity - previous_u_velocity
                 if self.metadata["write_every"] > 1:
                     new_pos_temp = self.shift_fn(previous_position, self._u2v(previous_u_velocity))
-                    av_rlx, v_rlx, new_position_temp = self._sph_rlx(new_pos_temp, kwargs["n_part_per_traj"])
+                    av_rlx, v_rlx, new_position_temp = self._sph_rlx(
+                        new_pos_temp, 
+                        kwargs["n_part_per_traj"], 
+                        is_tvf=self.metadata["rlx_is_tvf"],
+                        dt_factor=self.metadata["rlx_dt_factor"],
+                        num_steps=self.metadata["rlx_num_steps"]
+                    )
                     v_acceleration = self.displ_fn(next_position, new_position_temp)
                     # # equivalent to:
                     # v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity) - av_rlx).std()

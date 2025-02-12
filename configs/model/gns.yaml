@@ -58,6 +58,16 @@ pushforward:
   unrolls: [0]
   probs: [1]
 
+neuralsph:
+  val:
+    is_tvf: False
+    dt_factor: 1
+    num_steps: 0
+  test:
+    is_tvf: False
+    dt_factor: 1
+    num_steps: 0
+
 num_rollout_steps: ${vars.num_rollout_steps}
 
 #Periodic boundary conditions
