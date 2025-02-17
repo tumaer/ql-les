@@ -39,111 +39,6 @@ from src.utils.eval_utils import update_wandb_id
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
-def resolve_experiment_defaults(experiment_cfg: DictConfig, config_path: str) -> DictConfig:
-    """
-    Resolves the `defaults:` section in an experiment config by loading referenced YAML files.
-    :param experiment_cfg: The loaded but unresolved experiment config.
-    :param config_path: The path to the Hydra config directory.
-    :return: A fully resolved experiment configuration.
-    """
-    resolved_cfg = experiment_cfg.copy()
-    
-    if "defaults" in experiment_cfg:
-        resolved_defaults = []
-        
-        for entry in experiment_cfg.defaults:
-            if isinstance(entry, DictConfig) and "override /" in list(entry.keys())[0]:
-                # Extract the key and filename
-                key = list(entry.keys())[0]
-                filename = entry[key]  # e.g., "gns"
-                key = key.replace("override /", "")  # e.g., "data"
-                # Construct the correct path to load the referenced YAML
-                ref_config_path = os.path.join(config_path, key, f"{filename}.yaml")
-                ref_config_path = os.path.normpath(ref_config_path)
-                if not os.path.exists(ref_config_path):
-                    raise FileNotFoundError(f"Referenced config not found: {ref_config_path}")
-
-                # Load the referenced YAML
-                ref_config = OmegaConf.load(ref_config_path)
-                
-                if "defaults" in ref_config:
-                    # Resolve the referenced config's defaults (sub-configs)
-                    for sub_entry in ref_config.defaults:
-                        if "_self_" in sub_entry: # Skip self reference
-                            continue      
-                        sub_config_path = os.path.join(config_path, key, f"{sub_entry}.yaml")
-                        if not os.path.exists(sub_config_path):
-                            raise FileNotFoundError(f"Referenced config not found: {sub_config_path}")
-                        sub_config = OmegaConf.load(sub_config_path)
-                        ref_config = OmegaConf.merge(ref_config, sub_config)
-                        
-                    ref_config.pop("defaults") # Remove the defaults section after resolving
-                        
-                # Merge the referenced config into experiment.yaml
-                resolved_cfg = OmegaConf.merge(resolved_cfg, {key: ref_config})
-                
-                # Store resolved default
-                resolved_defaults.append({key: filename})
-
-        # Replace `defaults:` with fully resolved ones
-        resolved_cfg.defaults = resolved_defaults
-        
-        resolved_cfg.pop("defaults")
-    
-    return resolved_cfg
-
-def load_and_resolve_experiment_cfg(experiment_name: str, config_path: str) -> DictConfig:
-    """
-    Loads an experiment config and resolves its `defaults:` section.
-    :param experiment_name: The name of the experiment YAML file (without `.yaml`).
-    :param config_path: The path to the Hydra config directory.
-    :return: The fully resolved experiment configuration.
-    """
-    
-    exp_cfg = OmegaConf.load(os.getcwd() + f"/configs/experiment/{experiment_name}")
-
-    resolved_exp_cfg = resolve_experiment_defaults(exp_cfg, config_path)
-    
-    
-    return resolved_exp_cfg
-
-def merge_without_overwrite(target_cfg, source_cfg):
-    """
-    Recursively merges source_cfg into target_cfg,
-    adding keys that are missing in target_cfg,
-    and does NOT attempt to resolve interpolation.
-    """
-    # Convert source_cfg to a plain dict without resolution
-    src_dict = OmegaConf.to_container(source_cfg, resolve=False)
-
-    # Convert target_cfg similarly, so you can manipulate
-    tgt_dict = OmegaConf.to_container(target_cfg, resolve=False)
-
-    # Recursively merge these two *plain python* dicts
-    def _merge_dicts(tgt, src):
-        for k, v in src.items():
-            if k not in tgt:
-                tgt[k] = v
-            elif isinstance(v, dict) and isinstance(tgt[k], dict):
-                _merge_dicts(tgt[k], v)
-            # else: do not overwrite
-
-    _merge_dicts(tgt_dict, src_dict)
-
-    #Build a new DictConfig from the merged python dict
-    merged_cfg = OmegaConf.create(tgt_dict)
-    return merged_cfg
-
-
-def capture_cli_overrides() -> DictConfig:
-    """Capture CLI overrides before Hydra merges them into the default config."""
-    cli_overrides_raw = OmegaConf.from_cli()# Raw list of CLI overrides
-    for override in cli_overrides_raw.keys():
-        strip_key = str(override).strip("+")  # Remove the '+' prefix
-        cli_overrides_raw[strip_key] = cli_overrides_raw.pop(override)  # Replace the key
-
-
-    return cli_overrides_raw  # Returns only explicit CLI overrides
 
 @task_wrapper
 def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -204,69 +99,68 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return metric_dict, object_dict
 
 
-
-@hydra.main(version_base="1.3", config_path="../configs", config_name="eval_default.yaml")
-def main(cfg: DictConfig):
+def main():
     """Main entry point for evaluation."""
     
     #Capture CLI overrides
-    cli_overrides = capture_cli_overrides()
+    cli_overrides = OmegaConf.from_cli()
+    assert "ckpt_path" in cli_overrides, (
+        "You must specify the checkpoint path with `ckpt_path=<path_to_ckpt>`"
+    )
  
     # print(f"Captured CLI Overrides: {OmegaConf.to_yaml(cli_overrides)}")  # Debugging info
     
     if "experiment" not in cli_overrides:
         
-        ckpt_path = cfg.get("ckpt_path", None)
-        if not ckpt_path:
-            raise ValueError("You must specify the checkpoint path with ++ckpt_path=<path_to_ckpt>")
-        
-        #Checkpoint configs path
-        ckpt_cfgs = os.path.join(os.path.dirname(os.path.dirname(ckpt_path)), ".hydra")
+        ckpt_path = cli_overrides["ckpt_path"]
+        ckpt_root = os.path.dirname(os.path.dirname(ckpt_path))
+
+        # Checkpoint configs path
+        ckpt_cfgs = os.path.join(ckpt_root, ".hydra")
         
         #Extract the experiment name from overrides.yaml
         overrides_path = os.path.join(ckpt_cfgs, "overrides.yaml")
         with open(overrides_path, "r") as f:
             overrides = f.readlines()
             
-        #Base cfg path, used to generate the checkpoint
-        base_cfg_path = os.path.join(ckpt_cfgs, "config.yaml")
-        base_cfg = OmegaConf.load(base_cfg_path)
+        # Base cfg path, used to generate the checkpoint
+        ckpt_cfg = OmegaConf.load(os.path.join(ckpt_cfgs, "config.yaml"))
         
-        #Hardcode the task name to eval
-        base_cfg["task_name"] = "eval"
-        base_cfg.pop("train")
-        base_cfg.pop("test")
+        # Hardcode the task name to eval
+        ckpt_cfg["task_name"] = "eval"
+        ckpt_cfg.pop("train")  # ot set to False
+        ckpt_cfg.pop("test")  # ot set to True
         
-        experiment_name = None
-        for line in overrides:
-            if "experiment=" in line:
-                experiment_name = line.split("=")[1].strip()
-                break
-        if not experiment_name:
+        experiment = next((line.split("=")[1].strip() for line in overrides if "experiment=" in line))
+        if not experiment:
             raise ValueError("Experiment name not found in overrides.yaml")
 
-        #Load and resolve experiment.yaml
-        configs_abs_path = os.path.abspath("./configs")
-        #Experiment cfg
-        experiment_cfg = load_and_resolve_experiment_cfg(experiment_name, configs_abs_path)  
-        
-    
-        final_cfg = merge_without_overwrite(base_cfg, experiment_cfg)
-        
-        #Merge experiment cfg with base_cfg
-        final_cfg = OmegaConf.merge(final_cfg, cli_overrides)
+        # First load the default config to the experiment used to generate the checkpoint.
+        # Then merge the checkpoint config and CLI overrides.
+        hydra.initialize(config_path="../configs", version_base="1.3")
+        experiment_cfg = hydra.compose(
+            config_name="eval_default.yaml", 
+            overrides=[f"experiment={experiment[:-5]}"],
+        )
+        OmegaConf.set_struct(experiment_cfg, False)  # allow adding new keys
+        cfg = OmegaConf.merge(experiment_cfg, ckpt_cfg, cli_overrides)
 
-        extras(final_cfg)
+        # record logs during testing
+        test_logs = os.path.join(ckpt_root, "logs")
+        os.makedirs(test_logs, exist_ok=True)
+        # The following two depend on the hydra run path, which we do not have
+        cfg.paths.output_dir = test_logs
+        cfg.paths.work_dir = test_logs
+    else:
+        raise NotImplementedError(
+            "'experiment' cannot be specified! It is inferred from the checkpoint."
+        )
 
-        # Continue with evaluation
-        evaluate(final_cfg)
-        
-    else: 
-        # apply extra utilities
-        # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
-        extras(cfg)
+    # apply extra utilities
+    # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
+    extras(cfg)
 
-        evaluate(cfg)
+    evaluate(cfg)
 
 if __name__ == "__main__":
     main()
