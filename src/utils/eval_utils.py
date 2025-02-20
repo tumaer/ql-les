@@ -134,7 +134,7 @@ def eval_single_rollout(
         kwargs = {"simulator": simulator} if is_norm else {}
         computed_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, **kwargs
+            features["bounds"], pbc=pbc, is_norm=is_norm, **kwargs
         )
                 
         return computed_metrics, trajectory_rollout, ground_truth_positions
@@ -170,7 +170,10 @@ def eval_single_rollout(
     
         is_norm = True  # compute the metrics in normalized space
         if is_norm:
-            u_diff = simulator._norm(u_vel_predictions - ground_truth_u_velocity, "uu")
+            u_diff = (
+                simulator._norm(u_vel_predictions, "uu") 
+                - simulator._norm(ground_truth_u_velocity, "uu")
+            )
             kwargs = {"simulator": simulator}
         else:
             u_diff = u_vel_predictions - ground_truth_u_velocity
@@ -178,7 +181,7 @@ def eval_single_rollout(
             
         computed_position_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, u_vel=True, **kwargs
+            features["bounds"], pbc=pbc, u_vel=True, is_norm=is_norm, **kwargs
         )
         # print(computed_position_metrics["mse"])
         computed_vel_metrics = (u_diff ** 2).mean(dim=(1, 2))

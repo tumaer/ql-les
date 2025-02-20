@@ -6,7 +6,7 @@ from src.utils.nbrs_utils import wrap_displacement
 
 def compute_metrics(
     predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False, 
-    simulator=None
+    simulator=None, is_norm=True
 ):
     """
     Compute metrics for the given predictions and targets.
@@ -62,23 +62,23 @@ def compute_metrics(
 
     v_p = wrap_displacement((predictions[1:] - predictions[:-1]), boundaries)
     v_t = wrap_displacement((targets[1:] - targets[:-1]), boundaries)
-    v_diff = v_p - v_t
-    is_norm = True
     if is_norm:
-        v_diff = simulator._norm(v_diff, "vv")
+        v_p = simulator._norm(v_p, "vv")
+        v_t = simulator._norm(v_t, "vv")
+    v_diff = v_p - v_t
 
     computed_metrics = {}
     loss_ranges = [1, 5, 10, 20, 50, 100]
     for metric_name in active_metrics:
         if metric_name == "mse":
-            loss = (v_diff **2)
-            computed_metrics["mse"] = loss.mean(dim=(1, 2))
+            loss = (v_diff **2).mean(dim=(1, 2))
+            computed_metrics["mse"] = loss
             for t in loss_ranges:
                 if t < predictions.shape[0]:  # Ensure valid range
                     computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
         elif metric_name == "mae":
-            loss = torch.abs(v_diff)
-            computed_metrics["mae"] = loss.mean(dim=(1, 2))
+            loss = torch.abs(v_diff).mean(dim=(1, 2))
+            computed_metrics["mae"] = loss
             for t in loss_ranges:
                 if t < predictions.shape[0]: 
                     computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range

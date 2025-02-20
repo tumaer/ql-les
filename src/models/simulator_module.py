@@ -9,7 +9,7 @@ from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
 
-class GNSLitModule(LightningModule):
+class SimulatorLitModule(LightningModule):
     """A LightningModule for training a Graph Network Simulator (GNS) model."""
     
     def __init__(
@@ -24,12 +24,10 @@ class GNSLitModule(LightningModule):
         pushforward: Dict[str, Any] = None,
         neuralsph: Dict[str, Any] = None,
         num_rollout_steps: int = 1,
-        pbc: bool = True,
         vel_solver: str = "simple",
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
         active_metrics: Dict[str, Any] = None,
-        
     ) -> None:
         """Initialize the GNS model's LightningModule.
 
@@ -43,7 +41,6 @@ class GNSLitModule(LightningModule):
         # For model checkpointing
         self.save_hyperparameters(logger=False, ignore=['net'])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
-        self.pbc = pbc
         self.neuralsph = neuralsph
 
         # Loss weights
@@ -99,7 +96,7 @@ class GNSLitModule(LightningModule):
             "position_sequence": batch.enc_pos,
             "n_particles_per_trajectory": batch.n_particles_per_trajectory,
             "particle_types": batch.particle_types,
-            "pbc": self.pbc,
+            "pbc": any(self.net._pbc),
             "position_sequence_noise": position_sequence_noise,
         }
         if self.pushforward is not None:
@@ -160,7 +157,7 @@ class GNSLitModule(LightningModule):
             simulator=self.net, 
             metadata=self.net.metadata, 
             num_rollout_steps=self.num_rollout_steps,
-            pbc=self.pbc, 
+            pbc=any(self.net._pbc), 
             device=self.net._device,
             active_metrics=self.active_metrics,
             vis_config=self.visualize[f"vis_{split}"],
@@ -172,7 +169,7 @@ class GNSLitModule(LightningModule):
         if self.alpha_u != 0.0:
             position_loss, u_vel_loss = loss
             self.log(f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)
-            self.log(f"{split}/u_velocity_loss", u_vel_loss.mean(), **kwargs_log)
+            self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
         else:
             position_loss = loss
             self.log(f"{split}/loss", position_loss["mse"].mean(), **kwargs_log)
@@ -180,7 +177,7 @@ class GNSLitModule(LightningModule):
             #     self.log(f"val/{k}", position_loss[k].mean(), **kwargs_log)
             #     self.log(f"val/{k}std", position_loss[k].std(), **kwargs_log)
     
-        self.log(f"{split}/postion_loss", position_loss["mse"].mean(), **kwargs_log)
+        self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
         self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
 
         self.trajectory_idx += 1
@@ -208,11 +205,10 @@ class GNSLitModule(LightningModule):
 
         if self.hparams.compile and stage == "fit":
             self.net = torch.compile(self.net)
+            print("Model compiled!")
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        # This overengineered solution is needed if we want to increment the learning
-        # rate at every gradient descent step, while specifying the learning rate
-        # schedule in terms of epochs.
+        # To increment the learning rate at every gradient descent step
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         if self.hparams.scheduler is not None:
             if (type(self.hparams.scheduler) is partial) and (

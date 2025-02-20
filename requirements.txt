@@ -41,3 +41,5 @@ matplotlib
 pickle-mixin
 pyvista
 ipython
+# for SEGNN
+e3nn==0.5.5

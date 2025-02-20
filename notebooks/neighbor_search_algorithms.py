@@ -661,7 +661,7 @@ def _compute_connectivity(self, node_features, n_particles_per_trajectory, radiu
         return i, j
     
 #TODO: PyG with PBC
-def _compute_connecitivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
+def _compute_connectivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
          # handle batches. Default is 2 examples per batch
         # batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory)]).to(self._device)
         # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius

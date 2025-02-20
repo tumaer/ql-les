@@ -1,7 +1,4 @@
 # @package _global_
-
-# to execute this experiment run:
-# python train.py experiment=gns_train_val_test_kolm2d
 defaults:
   - override /model: gns
   - override /data: kolm2d_every10
@@ -10,52 +7,14 @@ defaults:
   - override /callbacks: custom
   - override /logger: wandb
 
-
-# all parameters below will be merged with parameters from default configurations set above
-# this allows you to overwrite only specified parameters
-
-#for eval
-# ckpt_path: ${paths.log_dir}/train/runs/2025-01-14_12-57-09/checkpoints/epoch=1-step=12000.ckpt # Replace with the path to the exact checkpoint file
-
-
 model:
-  _target_: src.models.gns_module.GNSLitModule
+  _target_: src.models.simulator_module.SimulatorLitModule
   net:
-    # particle_dimension: 2
-    node_in: 38 # ((past_v=5 + past_u=6) * dim=2) + (embed_size=16)
-    edge_in: 3
-    node_out: 4 #Specify the dimension of the output. Example: 2 for predicting a single acceleration value for 2D coordinates
-    dataset_path: ${data.data_dir} # Path to the dataset
     noise_std: 3.0e-4  # TODO:  Ablate this.
   pushforward: null
   vel_solver: "simple"  # "simple", "tvf", "neural_sph"
-  pbc: true
   alpha_u: 1.0
   alpha_v: 1.0
-  active_metrics: ["mse", "e_kin"]
-
-  visualize: 
-    vis_test: 
-      out_type: "none"
-      rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
-
-trainer:
-  min_epochs: null
-  max_epochs: null
-  # gradient_clip_val: 0.5
-  num_sanity_val_steps: 1 # before training starts
-  log_every_n_steps: 1000
-  limit_val_batches: 20  # evaluate this number of (sub-)trajectories
-  # limit_train_batches: 500  # train on this number of (sub-)trajectories
-  # # the next two arguments run validation every N training steps, and should be used 
-  # # with model_checkpoint: every_n_train_steps: 10_000
-  check_val_every_n_epoch: null
-  val_check_interval: 10_000
-  max_steps: 500_000
-callbacks:
-  model_checkpoint:
-    every_n_train_steps: 10_000
-
 
 tags: ["kolm", "gns"]
 

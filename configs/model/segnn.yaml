@@ -7,9 +7,9 @@ net:
   # Specify the correct path to the GNS model implementation (Simulator) within the SimulatorLitModule
   _target_: src.models.simulator.Simulator  # Adjust this to the actual path for your GNS simulator model
   _partial_: true
-  model_name: "gns"
+  model_name: "segnn"
   input_seq_length: ${vars.input_seq_length}
-  latent_dim: 128
+  latent_dim: 64
   num_message_passing_steps: 10
   noise_std: 3.0e-4 
   num_particle_types: 9
@@ -18,8 +18,10 @@ net:
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
   # kwargs
-  mlp_num_layers: 1
-  mlp_hidden_dim: 128
+  lmax_attr: 1
+  lmax_hidden: 1
+  velocity_aggregate: "avg"
+  norm: "none"
 
 # Optimizer configuration
 optimizer:
@@ -27,16 +29,6 @@ optimizer:
   _target_: torch.optim.AdamW
   lr: ${..scheduler.init_value}
   weight_decay: 1.e-8
-
-# # Scheduler configuration
-# scheduler:
-#   _partial_: true
-#   _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
-#   optimizer: ${..optimizer} # Reference optimizer from the model configuration
-#   min_lr: 0.0001
-#   steps_per_epoch: 1
-#   warmup_epochs: 0
-#   max_epochs: 10
 
 scheduler:
   _target_: src.utils.schedulers.ExpDecayLR

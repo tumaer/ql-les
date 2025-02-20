@@ -10,45 +10,52 @@
 if [ -z "$SLURM_JOB_ID" ]; then
     echo "Warning: Running script outside of SLURM."
 else
-  # If using Slurm: create logs directory if it doesn't exist
+  # If using Slurm: create logs directory if it doesn't exist already
   mkdir -p slogs
 fi
 
-# Read command-line arguments and set default alpha_u if not provided
-CASE_NAME="$1"
-ALPHA_U="${2:-1.0}"  # can be specified as "1" or "1.0"
-EVERY_N="${3:-1}"  # can be specified as "1" or "10"
-
-# Check if case name is provided
-if [ -z "$CASE_NAME" ]; then
-  echo "Usage: sbatch scripts/slurm_vel_solver.sh <case_name> [alpha_u]"
+# Check if 4 arguments are provided
+if [ "$#" -ne 4 ]; then
+  echo "Usage: sbatch scripts/slurm_vel_solver.sh <model_name> <vel_solver> <alpha_u> <every_n>"
   exit 1
 fi
 
-echo "Running case '${CASE_NAME}' with alpha_u=${ALPHA_U}"
-if (( $(echo "$ALPHA_U == 0.0" | bc -l) )); then
-  # If alpha_u == 0, fall back to predicting only acceleration for v
-  echo "Predicting only acceleration for v"
-  python src/train.py experiment=gns_kolm2d_every${EVERY_N}.yaml model.alpha_u=${ALPHA_U} \
-    +logger.wandb.name=koml2d_${CASE_NAME} model.vel_solver=${CASE_NAME} \
-    model.net.node_in=26 model.net.node_out=2
-else
-  # If alpha_u != 0, predict both accelerations for u and v
-  echo "Predicting accelerations for u and v"
-  python src/train.py experiment=gns_kolm2d_every${EVERY_N}.yaml model.alpha_u=${ALPHA_U} \
-    +logger.wandb.name=koml2d_${CASE_NAME} model.vel_solver=${CASE_NAME}
-fi
+# Read command-line arguments
+MODEL_NAME="$1"  # "gns" or "segnn"
+VEL_SOLVER="$2"  # "simple", "tvf", "simple_u", "simple_u_closure", "simple_rlx"
+ALPHA_U="$3"  # can be specified as "1" or "1.0"
+EVERY_N="$4"  # can be specified as "1" or "10"
 
-# # Runs to start:
-# sbatch scripts/slurm_vel_solver.sh simple 0.0
-# sbatch scripts/slurm_vel_solver.sh simple 0.000001
-# sbatch scripts/slurm_vel_solver.sh simple 1
-# sbatch scripts/slurm_vel_solver.sh tvf 1
-# sbatch scripts/slurm_vel_solver.sh simple_u 1
-# sbatch scripts/slurm_vel_solver.sh simple_u_closure 1 - really bad
-# sbatch scripts/slurm_vel_solver.sh simple_rlx 1
-# 
-# sbatch scripts/slurm_vel_solver.sh simple 1 10
-# sbatch scripts/slurm_vel_solver.sh tvf 1 10
-# sbatch scripts/slurm_vel_solver.sh simple_u 1 10
-# sbatch scripts/slurm_vel_solver.sh simple_rlx 1 10
+echo "Training ${MODEL_NEME} with vel_solver=${VEL_SOLVER}, alpha_u=${ALPHA_U}, and every_n=${EVERY_N}"
+python src/train.py experiment=${MODEL_NAME}_kolm2d_every${EVERY_N}.yaml model.alpha_u=${ALPHA_U} \
+  +logger.wandb.name=${MODEL_NAME}_${VEL_SOLVER} model.vel_solver=${VEL_SOLVER}
+
+### Runs
+
+# Code validation:
+# sbatch scripts/slurm_vel_solver.sh gns simple 0.0 1
+# sbatch scripts/slurm_vel_solver.sh gns simple 0.000001 1
+
+# gns & every1
+# sbatch scripts/slurm_vel_solver.sh gns simple 1 1
+# sbatch scripts/slurm_vel_solver.sh gns tvf 1 1
+# sbatch scripts/slurm_vel_solver.sh gns simple_u 1 1
+# sbatch scripts/slurm_vel_solver.sh gns simple_u_closure 1 1  # really bad
+# sbatch scripts/slurm_vel_solver.sh gns simple_rlx 1 1
+# gns & every10
+# sbatch scripts/slurm_vel_solver.sh gns simple 1 10
+# sbatch scripts/slurm_vel_solver.sh gns tvf 1 10
+# sbatch scripts/slurm_vel_solver.sh gns simple_u 1 10
+# sbatch scripts/slurm_vel_solver.sh gns simple_rlx 1 10
+
+# segnn & every1
+# sbatch scripts/slurm_vel_solver.sh segnn simple 1 1
+# sbatch scripts/slurm_vel_solver.sh segnn tvf 1 1
+# sbatch scripts/slurm_vel_solver.sh segnn simple_u 1 1
+# sbatch scripts/slurm_vel_solver.sh segnn simple_u_closure 1 1  # really bad
+# sbatch scripts/slurm_vel_solver.sh segnn simple_rlx 1 1
+# segnn & every10
+# sbatch scripts/slurm_vel_solver.sh segnn simple 1 10
+# sbatch scripts/slurm_vel_solver.sh segnn tvf 1 10
+# sbatch scripts/slurm_vel_solver.sh segnn simple_u 1 10
+# sbatch scripts/slurm_vel_solver.sh segnn simple_rlx 1 10

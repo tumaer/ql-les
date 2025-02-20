@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - override /model: gns
+  - override /model: segnn
   - override /data: kolm2d_every1
   - override /trainer: gpu
   - override /vars: kolm2d
@@ -16,7 +16,7 @@ model:
   alpha_u: 1.0
   alpha_v: 1.0
 
-tags: ["kolm", "gns"]
+tags: ["kolm", "segnn"]
 
 logger:
   wandb:
