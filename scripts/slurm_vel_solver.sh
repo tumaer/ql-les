@@ -4,7 +4,7 @@
 #SBATCH --error=slogs/vel_solvers_%A_%a.err
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --gres=gpu:1
 
 if [ -z "$SLURM_JOB_ID" ]; then
@@ -16,7 +16,7 @@ fi
 
 # Check if 4 arguments are provided
 if [ "$#" -ne 4 ]; then
-  echo "Usage: sbatch scripts/slurm_vel_solver.sh <model_name> <vel_solver> <alpha_u> <every_n>"
+  echo "Usage: sbatch scripts/slurm_vel_solver.sh <MODEL_NAME> <VEL_SOLVER> <ALPHA_U> <EVERY_N>"
   exit 1
 fi
 
