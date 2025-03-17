@@ -6,7 +6,7 @@ from src.utils.nbrs_utils import wrap_displacement
 
 def compute_metrics(
     predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False, 
-    simulator=None, is_norm=True
+    metric_space="diff"
 ):
     """
     Compute metrics for the given predictions and targets.
@@ -62,22 +62,24 @@ def compute_metrics(
 
     v_p = wrap_displacement((predictions[1:] - predictions[:-1]), boundaries)
     v_t = wrap_displacement((targets[1:] - targets[:-1]), boundaries)
-    if is_norm:
-        v_p = simulator._norm(v_p, "vv")
-        v_t = simulator._norm(v_t, "vv")
-    v_diff = v_p - v_t
+    dv = v_p - v_t  # difference space
+    if metric_space == "norm":
+        dv /= torch.tensor(metadata["vel_std"], device=dv.device)
+    elif metric_space == "phys":
+        dv /= metadata["dt"] * metadata["write_every"]
 
+    d_pos = v_p = wrap_displacement((predictions - targets), boundaries)
     computed_metrics = {}
     loss_ranges = [1, 5, 10, 20, 50, 100]
     for metric_name in active_metrics:
         if metric_name == "mse":
-            loss = (v_diff **2).mean(dim=(1, 2))
+            loss = (dv **2).mean(dim=(1, 2))
             computed_metrics["mse"] = loss
             for t in loss_ranges:
                 if t < predictions.shape[0]:  # Ensure valid range
                     computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
         elif metric_name == "mae":
-            loss = torch.abs(v_diff).mean(dim=(1, 2))
+            loss = torch.abs(dv).mean(dim=(1, 2))
             computed_metrics["mae"] = loss
             for t in loss_ranges:
                 if t < predictions.shape[0]: 
@@ -86,6 +88,12 @@ def compute_metrics(
             computed_metrics["e_kin"] = compute_kinetic_energy(
                 predictions, targets, boundaries, metadata
             )
+        elif metric_name == "mse_pos":
+            loss = (d_pos **2).mean(dim=(1, 2))
+            computed_metrics["mse_pos"] = loss
+            for t in loss_ranges:
+                if t < predictions.shape[0]:
+                    computed_metrics[f"mse{t}_pos"] = loss[:t]
 
     return computed_metrics
 

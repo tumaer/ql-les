@@ -1,6 +1,10 @@
 #src.models.gns_module.py
 from typing import Any, Dict, Tuple
 from functools import partial
+import time
+import pickle
+import os
+
 import torch
 from torch import Tensor
 from lightning import LightningModule
@@ -28,6 +32,7 @@ class SimulatorLitModule(LightningModule):
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
         active_metrics: Dict[str, Any] = None,
+        metric_space: Dict[str, str] = "norm",
     ) -> None:
         """Initialize the GNS model's LightningModule.
 
@@ -63,6 +68,7 @@ class SimulatorLitModule(LightningModule):
         self.num_rollout_steps = num_rollout_steps
         self.vel_solver = vel_solver
         self.active_metrics = active_metrics
+        self.metric_space = metric_space
         self.visualize = visualize
         self.trajectory_idx = 0
 
@@ -145,12 +151,14 @@ class SimulatorLitModule(LightningModule):
     
     def on_validation_start(self) -> None:
         self.trajectory_idx = 0
+        self.metrics_dump = {}
     
     def validation_step(self, batch: Tuple[Tensor, Tensor], **kwargs) -> Dict[str, Tensor]:
         """Perform a single validation step, using the forward method to infer positions."""
         #ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
-        split = "test" if (("testing" in kwargs) and kwargs["testing"]) else "val"
+        is_test = (("testing" in kwargs) and kwargs["testing"])
+        split = "test" if is_test else "val"
         self.net.neuralsph=self.neuralsph[split]
         loss = eval_rollout(
             batch=batch,
@@ -162,7 +170,8 @@ class SimulatorLitModule(LightningModule):
             active_metrics=self.active_metrics,
             vis_config=self.visualize[f"vis_{split}"],
             trajectory_idx=self.trajectory_idx,
-            u_vel=True if self.alpha_u != 0.0 else False
+            u_vel=True if self.alpha_u != 0.0 else False,
+            metric_space=self.metric_space.test if is_test else self.metric_space.val,
         )
 
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
@@ -179,11 +188,27 @@ class SimulatorLitModule(LightningModule):
     
         self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
         self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
+        if "mse_pos" in position_loss:
+            self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
 
+        self.metrics_dump[self.trajectory_idx] = loss
         self.trajectory_idx += 1
-        
-    def on_test_epoch_start(self):
+
+    def on_test_start(self):
+        self.net.set_metadata_device(self.net._device)
         self.trajectory_idx = 0
+        self.metrics_dump = {}
+
+    def on_test_end(self):
+        # write full metrics to file
+        metrics_path = os.path.join(
+            self.visualize.vis_test.rollout_dir,
+            f"metrics_{time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime())}.pkl"
+        )
+        print(f"Writing metrics to {metrics_path}")
+        with open(metrics_path, "wb") as f:
+            pickle.dump(self.metrics_dump, f)
+
 
     def test_step(self, batch: Tuple[Tensor, Tensor]) -> Dict[str, Tensor]:
         """Perform a single test step, using the forward method to infer positions."""
@@ -196,9 +221,6 @@ class SimulatorLitModule(LightningModule):
     def on_train_epoch_start(self):
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
         return lr
-        
-    def on_test_start(self) -> None:
-        self.net.set_metadata_device(self.net._device)
 
     def setup(self, stage: str) -> None:
         """Setup model for training or evaluation."""

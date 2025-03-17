@@ -41,8 +41,8 @@ optimizer:
 scheduler:
   _target_: src.utils.schedulers.ExpDecayLR
   _partial_: true
-  init_value: 1.0e-4
-  transition_steps: 100_000
+  init_value: 1.0e-3
+  transition_steps: 250_000
   decay_rate: 0.1
   end_value: 1.0e-6
 
@@ -69,7 +69,10 @@ neuralsph:
     num_steps: 0
 
 num_rollout_steps: ${vars.num_rollout_steps}
-active_metrics: ["mse", "e_kin"]
+active_metrics: ["mse", "e_kin", "mse_pos"]
+metric_space:
+  val: "norm"  # {"phys", "norm", "diff"} = physical, normalized, difference
+  test: "phys"
 alpha_u: 0.0
 alpha_v: 1.0
 

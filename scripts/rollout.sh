@@ -10,7 +10,7 @@
 if [ "$#" -ne 2 ]; then
   echo "Wrong number of arguments. Currently "$#", should be 2"
   echo "Usage: sbatch scripts/rollout.sh <EVERY_N> <NSPH_SUFFIX>"
-  echo Currently supported: EVERY_N={1, 10}, NSPH_SUFFIX={"", "_neuralsph"}
+  echo "Currently supported: EVERY_N={1, 10}, NSPH_SUFFIX={'', '_neuralsph'}"
   exit 1
 fi
 
@@ -18,20 +18,20 @@ EVERY_N=$1
 nsph_suffix=$2
 
 if [ $EVERY_N -eq 1 ]; then # every1
-    rlt_len=50 # 1000
+    rlt_len=200 # 1000
     ckpts=(
-        "2025-02-20_11-51-24"  # simple
-        "2025-02-20_22-13-57"  # tvf
-        "2025-02-20_22-14-24"  # simple_u
-        "2025-02-20_22-14-35"  # simple_rlx
+        "2025-02-24_01-35-42"  # simple
+        "2025-02-24_01-36-13"  # tvf
+        "2025-02-24_02-06-00"  # simple_u
+        "2025-02-24_02-43-05"  # simple_rlx
     )
 elif [ $EVERY_N -eq 10 ]; then # every10
-    rlt_len=5 # 100
+    rlt_len=20 # 100
     ckpts=(
-        "2025-02-20_11-51-35"  # simple
-        "2025-02-20_22-14-49"  # tvf
-        "2025-02-20_23-09-21"  # simple_u
-        "2025-02-20_23-36-01"  # simple_rlx
+        "2025-02-24_02-54-54"  # simple
+        "2025-02-24_02-55-09"  # tvf
+        "2025-02-24_02-55-18"  # simple_u
+        "2025-02-24_02-55-24"  # simple_rlx
     )
 else
     echo "EVERY_N=${EVERY_N} not supported"
@@ -42,9 +42,9 @@ run_base() {
     python src/eval.py \
         ckpt_path="logs/train/runs/${ckpt}/checkpoints/last.ckpt" \
         vars.num_rollout_steps=${rlt_len} \
+        model.visualize.vis_test.rollout_dir="logs/train/runs/${ckpt}/rollouts_${rlt_len}${NSPH_SUFFIX}" \
         logger.wandb.offline=True "$@"
         # trainer.limit_test_batches=1 \
-        # model.visualize.vis_test.rollout_dir="logs/paper/${ckpt}/rollouts_${rlt_len}${NSPH_SUFFIX}" \
         # model.visualize.vis_test.out_type=pkl \
 }
 
@@ -71,3 +71,4 @@ fi
 
 # equivalently:
 # sbatch -J rollouts_50_1 scripts/rollout.sh 1 ""
+# sbatch -J rollouts_5_10 scripts/rollout.sh 10 ""

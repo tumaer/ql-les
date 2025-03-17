@@ -10,7 +10,7 @@ defaults:
 model:
   _target_: src.models.simulator_module.SimulatorLitModule
   net:
-    noise_std: 3.0e-4  # TODO:  Ablate this.
+    noise_std: 1.0e-4
   pushforward: null
   vel_solver: "simple"  # "simple", "tvf", "neural_sph"
   alpha_u: 1.0

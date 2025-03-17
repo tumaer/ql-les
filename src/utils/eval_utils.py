@@ -22,6 +22,7 @@ def eval_rollout(
     u_vel=False, 
     vis_config=None,
     trajectory_idx=0, 
+    metric_space="norm",
     **kwargs
 ):
     """
@@ -58,7 +59,8 @@ def eval_rollout(
             features["next_u_velocity"] = batch.target_u
             
         computed_metrics, rollout, ground_truth = eval_single_rollout(
-            simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel
+            simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel,
+            metric_space=metric_space
         )
 
         if not u_vel:
@@ -88,7 +90,8 @@ def eval_rollout(
 
 
 def eval_single_rollout(
-    simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=False
+    simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=False,
+    metric_space = "norm"
 ):
     """
     Evaluate a single trajectory rollout.
@@ -130,11 +133,9 @@ def eval_single_rollout(
         
         trajectory_rollout = position_predictions
         
-        is_norm = True  # compute the metrics in normalized space
-        kwargs = {"simulator": simulator} if is_norm else {}
         computed_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, is_norm=is_norm, **kwargs
+            features["bounds"], pbc=pbc, metric_space=metric_space
         )
                 
         return computed_metrics, trajectory_rollout, ground_truth_positions
@@ -168,23 +169,19 @@ def eval_single_rollout(
         trajectory_rollout = position_predictions
         u_vel_rollout = u_vel_predictions
     
-        is_norm = True  # compute the metrics in normalized space
-        if is_norm:
-            u_diff = (
-                simulator._norm(u_vel_predictions, "uu") 
-                - simulator._norm(ground_truth_u_velocity, "uu")
-            )
-            kwargs = {"simulator": simulator}
-        else:
-            u_diff = u_vel_predictions - ground_truth_u_velocity
-            kwargs = {}
-            
+        du = u_vel_predictions - ground_truth_u_velocity  # physical space
+
+        if metric_space == "norm":
+            du /= torch.tensor(metadata["u_std"], device=du.device)
+        elif metric_space == "diff":
+            du *= metadata["dt"] * metadata["write_every"]
+
         computed_position_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, u_vel=True, is_norm=is_norm, **kwargs
+            features["bounds"], pbc=pbc, u_vel=True, metric_space=metric_space
         )
         # print(computed_position_metrics["mse"])
-        computed_vel_metrics = (u_diff ** 2).mean(dim=(1, 2))
+        computed_vel_metrics = (du ** 2).mean(dim=(1, 2))
         # print(computed_vel_metrics)
         # import matplotlib.pyplot as plt
         # fig = plt.figure()
