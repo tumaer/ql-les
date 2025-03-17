@@ -1,0 +1,122 @@
+_wandb:
+    value:
+        cli_version: 0.19.8
+        m: []
+        python_version: 3.12.3
+        t:
+            "1":
+                - 1
+                - 12
+                - 55
+            "2":
+                - 1
+                - 12
+                - 55
+            "3":
+                - 13
+                - 16
+                - 23
+                - 55
+                - 61
+            "4": 3.12.3
+            "5": 0.19.8
+            "8":
+                - 5
+            "12": 0.19.8
+            "13": linux-x86_64
+config:
+    value: src/validate_code/tgv_lagrbench/gns.yaml
+dataset:
+    value:
+        name: null
+        src: /home/tkalinov/code/sph_les_directory/sph_les/data/2D_TGV_2500_10kevery100
+dtype:
+    value: float64
+eval:
+    value:
+        infer:
+            batch_size: 2
+            metrics:
+                - mse
+                - e_kin
+            metrics_stride: 1
+            n_extrap_steps: 0
+            n_trajs: -1
+            out_type: pkl
+        n_rollout_steps: 20
+        rollout_dir: null
+        test: false
+        train:
+            batch_size: 1
+            metrics:
+                - mse
+            metrics_stride: 10
+            n_trajs: 50
+            out_type: none
+gpu:
+    value: -1
+info:
+    value:
+        dataset_name: tgv2d
+        len_eval: 200
+        len_train: 12000
+        num_params: 170258
+        step_start: 0
+load_ckp:
+    value: null
+logging:
+    value:
+        ckp_dir: ckp
+        eval_steps: 10000
+        log_steps: 1000
+        run_name: gns_tgv2d_LB
+        wandb: true
+        wandb_entity: lagrangebench
+        wandb_project: tgv2d
+mode:
+    value: all
+model:
+    value:
+        input_seq_length: 6
+        isotropic_norm: false
+        latent_dim: 128
+        latent_size: 9
+        lmax_attributes: 1
+        lmax_hidden: 1
+        magnitude_features: false
+        name: gns
+        num_mlp_layers: 1
+        num_mp_steps: 2
+        particle_type_embedding_size: 16
+        segnn_norm: none
+        velocity_aggregate: avg
+neighbors:
+    value:
+        backend: jaxmd_vmap
+        multiplier: 1.25
+seed:
+    value: 0
+train:
+    value:
+        batch_size: 1
+        loss_weight:
+            acc: 1
+            pos: 0
+            vel: 0
+        noise_std: 0
+        num_workers: 0
+        optimizer:
+            lr_decay_rate: 0.1
+            lr_decay_steps: 100000
+            lr_final: 1e-06
+            lr_start: 0.0001
+        pushforward:
+            probs:
+                - 1
+            steps:
+                - -1
+            unrolls:
+                - 0
+        step_max: 500000
+xla_mem_fraction:
+    value: 0.75

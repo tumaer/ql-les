@@ -1,0 +1,43 @@
+{
+  "os": "Linux-5.14.0-1056-oem-x86_64-with-glibc2.39",
+  "python": "CPython 3.12.3",
+  "startedAt": "2025-03-17T13:20:25.657277Z",
+  "args": [
+    "config=src/validate_code/tgv_lagrbench/gns.yaml"
+  ],
+  "program": "/home/tkalinov/code/sph_les_directory/lagrangebench/main.py",
+  "git": {
+    "remote": "https://github.com/komnin42/sph_les.git",
+    "commit": "a97bdbf3854189d86ccb571106ee19a0e7f33565"
+  },
+  "email": "teodor4.kalinov@gmail.com",
+  "root": "/home/tkalinov/code/sph_les_directory/sph_les",
+  "host": "mikoto",
+  "executable": "/home/atoshev/code/lagrangebench/.venv/bin/python",
+  "cpu_count": 12,
+  "cpu_count_logical": 24,
+  "gpu": "Quadro RTX 4000",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "470886195200",
+      "used": "427726880768"
+    }
+  },
+  "memory": {
+    "total": "67074707456"
+  },
+  "cpu": {
+    "count": 12,
+    "countLogical": 24
+  },
+  "gpu_nvidia": [
+    {
+      "name": "Quadro RTX 4000",
+      "memoryTotal": "8589934592",
+      "cudaCores": 2304,
+      "architecture": "Turing"
+    }
+  ],
+  "cudaVersion": "12.4"
+}

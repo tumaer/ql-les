@@ -1,0 +1,51 @@
+# @package _global_
+defaults:
+  - override /model: gns
+  - override /data: tgv2d
+  - override /trainer: gpu
+  - override /vars: tgv2d
+  - override /callbacks: custom
+  - override /logger: wandb
+
+model:
+  _target_: src.models.simulator_module.SimulatorLitModule  # Adjust this to the actual path for your GNS Lightning module
+  net:
+    latent_dim: 64
+    mlp_hidden_dim: 64
+    noise_std: 0 #Random-walk noise
+  pushforward: null
+  scheduler:
+    init_value: 1.0e-4
+    transition_steps: 1.0e5
+  visualize:
+    vis_test:
+      out_type: "vtk"
+
+
+
+tags: ["tgv", "gns"]
+
+logger:
+  wandb:
+    project: "tgv2d_val_lagBench"
+
+seed: 12345
+
+data:
+  data_dir: ${paths.data_dir}/2D_TGV_DEBUG
+
+vars:
+  num_rollout_steps: 5
+  max_pushforward_steps: 0
+
+trainer:
+  log_every_n_steps: 1
+  limit_val_batches: 1
+  limit_train_batches: 5
+  limit_test_batches: 1
+  val_check_interval: 10
+  max_steps: 10000
+
+callbacks:
+  early_stopping:
+    patience: 10000

@@ -116,7 +116,6 @@ def pbc_duplication(most_recent_positions, n_particles_per_trajectory_combined, 
         [-1, 0, 1] if p else [0] for p in pbc
     ]
     shifts = torch.cartesian_prod(*[torch.tensor(r) for r in shift_ranges]).float()
-    shifts = shifts[~torch.all(shifts == 0, dim=1)].to(most_recent_positions.device) # Exclude the center (original frame)
 
     # Scale shifts by the domain size
     shifts = (shifts * domain_size).to(most_recent_positions.device)

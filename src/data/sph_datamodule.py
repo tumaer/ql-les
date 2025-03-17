@@ -17,6 +17,7 @@ class SPHDataModule(LightningDataModule):
         nl_backend: str = "jaxmd_vmap",
         num_workers: int = 0,
         pin_memory: bool = False,
+        shuffle: bool = True,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -27,6 +28,7 @@ class SPHDataModule(LightningDataModule):
         self.nl_backend = nl_backend
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.shuffle = shuffle
         
         self.train_dataset = None
         self.val_dataset = None
@@ -62,7 +64,7 @@ class SPHDataModule(LightningDataModule):
             batch_size= self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=True,
+            shuffle=self.shuffle,
         )
 
     def val_dataloader(self) -> PyGDataLoader:
@@ -71,7 +73,7 @@ class SPHDataModule(LightningDataModule):
             batch_size= self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=False,
+            shuffle=self.shuffle,
         )
 
     def test_dataloader(self) -> PyGDataLoader:
@@ -80,6 +82,6 @@ class SPHDataModule(LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=False,
+            shuffle=self.shuffle,
         )
         
