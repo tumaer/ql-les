@@ -10,10 +10,10 @@ defaults:
 model:
   _target_: src.models.simulator_module.SimulatorLitModule  # Adjust this to the actual path for your GNS Lightning module
   net:
-    num_message_passing_steps: 10
-    latent_dim: 64
-    mlp_hidden_dim: 64
+    latent_dim: 128
+    mlp_hidden_dim: 128
     mlp_num_layers: 1
+    num_message_passing_steps: 10
     particle_type_embedding_size: 16
     noise_std: 0 #Random-walk noise
   pushforward: null
@@ -38,6 +38,7 @@ seed: 12345
 
 data:
   data_dir: ${paths.data_dir}/2D_TGV_DEBUG
+  shuffle: True
 
 vars:
   num_rollout_steps: 5
@@ -49,8 +50,8 @@ trainer:
   limit_train_batches: 5
   limit_test_batches: 1
   val_check_interval: 10
-  max_steps: 20000
+  max_steps: 50000
 
 callbacks:
   early_stopping:
-    patience: 20000
+    patience: 50000

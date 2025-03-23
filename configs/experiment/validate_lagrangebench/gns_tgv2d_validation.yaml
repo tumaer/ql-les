@@ -12,11 +12,16 @@ model:
   net:
     latent_dim: 64
     mlp_hidden_dim: 64
+    mlp_num_layers: 1
+    num_message_passing_steps: 10
+    particle_type_embedding_size: 16
     noise_std: 0 #Random-walk noise
   pushforward: null
   scheduler:
     init_value: 1.0e-4
-    transition_steps: 1.0e5
+    end_value: 1.0e-6
+    decay_rate: 0.1
+    transition_steps: 100000
   visualize:
     vis_test:
       out_type: "vtk"
@@ -33,6 +38,7 @@ seed: 12345
 
 data:
   data_dir: ${paths.data_dir}/2D_TGV_DEBUG
+  shuffle: True
 
 vars:
   num_rollout_steps: 5

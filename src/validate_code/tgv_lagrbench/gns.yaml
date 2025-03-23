@@ -1,7 +1,6 @@
 #run with  python /home/atoshev/code/lagrangebench/main.py config=./src/validate_code/tgv2d/gns.yaml
 extends: LAGRANGEBENCH_DEFAULTS
 
-
 dataset:
   src: /home/tkalinov/code/sph_les_directory/sph_les/data/2D_TGV_DEBUG
   name: tgv2d
@@ -9,7 +8,7 @@ dataset:
 model: 
   name: gns
   num_mp_steps: 10
-  latent_dim: 64
+  latent_dim: 64 
   num_mlp_layers: 2
   particle_type_embedding_size: 16
 
@@ -18,12 +17,11 @@ train:
     lr_start: 1.0e-4
     lr_final: 1.0e-6
     lr_decay_rate: 0.1
-    lr_decay_steps: 1.0e5
+    lr_decay_steps: 100000
   pushforward:
     steps: [-1]
     unrolls: [0]
     probs: [1]
-
 
   batch_size: 1
 

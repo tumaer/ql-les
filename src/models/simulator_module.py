@@ -107,7 +107,7 @@ class SimulatorLitModule(LightningModule):
         }
         if self.pushforward is not None:
             features["normalization_stats"] = self.net.normalization_stats
-            features["boundaries"] = self.net._boundaries,
+            features["boundaries"] = self.net._boundaries
         if self.alpha_u != 0.0:
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
@@ -135,9 +135,12 @@ class SimulatorLitModule(LightningModule):
 
             # Weighted combined loss
             loss = self.alpha_v * loss_v + self.alpha_u * loss_u
+            print(a_v_target[0,:])
+            print(a_u_target[0,:])
         else:
             # Calculate loss
             loss = particle_mse(pred, target, non_kinematic_mask)
+            print(target[0,:])
 
         return loss
 

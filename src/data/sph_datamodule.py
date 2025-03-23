@@ -4,6 +4,7 @@ from torch.utils.data import random_split
 from lightning import LightningDataModule
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from src.data.components.h5dataset import H5Dataset
+from torch.utils.data import Subset
 
 
 class SPHDataModule(LightningDataModule):
@@ -18,6 +19,7 @@ class SPHDataModule(LightningDataModule):
         num_workers: int = 0,
         pin_memory: bool = False,
         shuffle: bool = True,
+        limit_train_batches: Optional[float] = None,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -29,6 +31,7 @@ class SPHDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.shuffle = shuffle
+        self.limit_train_batches = limit_train_batches
         
         self.train_dataset = None
         self.val_dataset = None
@@ -38,12 +41,16 @@ class SPHDataModule(LightningDataModule):
         pass
         
     def setup(self, stage: Optional[str] = None):
-        if stage == "fit":
+        if stage == "fit":        
             self.train_dataset = H5Dataset(split="train",
                                            dataset_path=self.data_dir,
                                            input_seq_length=self.input_seq_length,
                                            extra_seq_length=self.max_pushforward_steps,
-                                           nl_backend=self.nl_backend)
+                                           nl_backend=self.nl_backend)   
+            if self.limit_train_batches is not None:
+                limited_len = self.batch_size * self.limit_train_batches
+                indices = list(range(limited_len))
+                self.train_dataset = Subset(self.train_dataset, indices)
             self.val_dataset = H5Dataset(split="valid", 
                                          dataset_path=self.data_dir, 
                                          input_seq_length=self.input_seq_length, 
@@ -73,7 +80,7 @@ class SPHDataModule(LightningDataModule):
             batch_size= self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=self.shuffle,
+            shuffle=False,
         )
 
     def test_dataloader(self) -> PyGDataLoader:
@@ -82,6 +89,6 @@ class SPHDataModule(LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            shuffle=self.shuffle,
+            shuffle=False,
         )
         
