@@ -1,0 +1,10 @@
+# @package _global_
+
+# no callbacks, no loggers
+
+defaults:
+  - default
+
+# disable callbacks and loggers during debugging
+callbacks: null
+logger: null
