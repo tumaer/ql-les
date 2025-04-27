@@ -551,7 +551,7 @@ class GNNLitModule(BaseLitModule):
         }
         if self.pushforward is not None:
             features["normalization_stats"] = self.net.normalization_stats
-            features["boundaries"] = self.net._boundaries,
+            features["boundaries"] = self.net._boundaries
         if self.alpha_u != 0.0:
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u

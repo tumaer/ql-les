@@ -1,0 +1,61 @@
+# @package _global_
+defaults:
+  - override /model: gns
+  - override /data: kolm2d_every10
+  - override /trainer: gpu
+  - override /vars: kolm2d
+  - override /callbacks: custom
+  - override /logger: wandb
+
+model:
+  _target_: src.models.simulator_module.SimulatorLitModule
+  net:
+    latent_dim: 128
+    mlp_hidden_dim: 128
+    mlp_num_layers: 1
+    num_message_passing_steps: 10
+    particle_type_embedding_size: 16
+    noise_std: 1.0e-4
+  pushforward: null
+  vel_solver: "simple"  # "simple", "tvf", "neural_sph"
+  alpha_u: 0.0
+  alpha_v: 1.0
+  scheduler:
+    init_value: 1.0e-4
+    end_value: 1.0e-6
+    decay_rate: 0.1
+    transition_steps: 100000
+  visualize:
+    vis_test:
+      out_type: "vtk"
+
+
+tags: ["kolm", "gns"]
+
+logger:
+  wandb:
+    project: "kolm2d_validate"
+
+seed: 12345
+
+data:
+  data_dir: ${paths.data_dir}/2D_KOLM_DEBUG
+  shuffle: True
+  limit_train_batches: ${trainer.limit_train_batches}
+
+vars:
+  num_rollout_steps: 5
+  max_pushforward_steps: 0
+
+trainer:
+  log_every_n_steps: 1
+  limit_val_batches: 1
+  limit_train_batches: 5
+  limit_test_batches: 1
+  val_check_interval: 10
+  max_steps: 50000
+
+callbacks:
+  early_stopping:
+    patience: 50000
+

@@ -45,7 +45,15 @@ def pushforward_preprocess(features, target_pos, unroll_steps):
     position_input = features["position_sequence"]
     normalization_stats = features["normalization_stats"]
     boundaries = features["boundaries"]
-    position_target = target_pos
+    position_sequence_noise = features["position_sequence_noise"]
+    
+    #Add noise
+    position_input = wrap_position((position_input + position_sequence_noise), boundaries)
+    last_noise = position_sequence_noise[:, -1].unsqueeze(1)
+    n_targets = target_pos.shape[1]
+    target_noise = last_noise.repeat(1, n_targets, 1) 
+    target_pos_noisy = wrap_position((target_pos + target_noise), boundaries)
+    position_target = target_pos_noisy
     
     input_sequence_size = position_input.size(1)
     pos_input_and_target = torch.cat([position_input, position_target], dim=1)
@@ -127,14 +135,13 @@ def pushforward_integrate(normalized_acceleration, position_sequence, normalizat
 
     # Use an Euler integrator to go from acceleration to position, assuming dt = 1.
     most_recent_position = position_sequence[:, -1]
-    most_recent_velocity = (most_recent_position - position_sequence[:, -2])
     if pbc:
-        most_recent_velocity = wrap_displacement(most_recent_velocity, boundaries)
+        most_recent_velocity = wrap_displacement((most_recent_position - position_sequence[:, -2]), boundaries)
     
     # Update velocity and position
     new_velocity = most_recent_velocity + acceleration
     new_position = most_recent_position + new_velocity
     if pbc:
-        new_position = wrap_position(most_recent_position, boundaries)
+        new_position = wrap_position(new_position, boundaries)
         
     return new_position

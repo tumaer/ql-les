@@ -1,3 +1,4 @@
+from turtle import pos
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing
@@ -36,12 +37,12 @@ def get_random_walk_noise_for_position_sequence(
     position_sequence, noise_std_last_step, boundaries, pbc=True
 ):
     """Returns random-walk noise in the velocity applied to the position."""
-    velocity_sequence = time_diff(position_sequence, boundaries, pbc)
+    velocity_sequence_shape = list(position_sequence.shape)
+    velocity_sequence_shape[1] -= 1
+    n_velocities = velocity_sequence_shape[1]
     
-    num_velocities = velocity_sequence.shape[1]
-    
-    velocity_sequence_noise = torch.randn(list(velocity_sequence.shape)) * (
-        noise_std_last_step/num_velocities**0.5
+    velocity_sequence_noise = torch.randn(velocity_sequence_shape) * (
+        noise_std_last_step/n_velocities**0.5
     )
     velocity_sequence_noise = torch.cumsum(velocity_sequence_noise, dim=1)
     
