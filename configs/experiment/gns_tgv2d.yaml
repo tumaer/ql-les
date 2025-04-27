@@ -8,7 +8,7 @@ defaults:
   - override /logger: wandb
 
 model:
-  _target_: src.models.simulator_module.SimulatorLitModule  # Adjust this to the actual path for your GNS Lightning module
+  _target_: src.models.gnn_module.GNNLitModule  # Adjust this to the actual path for your GNS Lightning module
   net:
     noise_std: 3.e-4 #Random-walk noise
   pushforward:

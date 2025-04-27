@@ -8,7 +8,7 @@ defaults:
   - override /logger: wandb
 
 model:
-  _target_: src.models.simulator_module.SimulatorLitModule
+  _target_: src.models.gnn_module.GNNLitModule
   net:
     noise_std: 3.0e-4  # TODO:  Ablate this.
   pushforward: null

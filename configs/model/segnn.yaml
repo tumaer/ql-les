@@ -1,11 +1,11 @@
 # configs/model/gns.yaml
 
 # Specify the correct path to the SimulatorLitModule in the Lightning module
-_target_: src.models.simulator_module.SimulatorLitModule  # Adjust this to the actual path for your GNS Lightning module
+_target_: src.models.gnn_module.GNNLitModule  # Adjust this to the actual path for your GNS Lightning module
 
 net:
-  # Specify the correct path to the GNS model implementation (Simulator) within the SimulatorLitModule
-  _target_: src.models.simulator.Simulator  # Adjust this to the actual path for your GNS simulator model
+  # Specify the correct path to the GNS model implementation (GNNSimulator) within the SimulatorLitModule
+  _target_: src.models.gnn_module.GNNSimulator  # Adjust this to the actual path for your GNS simulator model
   _partial_: true
   model_name: "segnn"
   input_seq_length: ${vars.input_seq_length}
@@ -17,6 +17,7 @@ net:
   dataset_path: ${data.data_dir} # Path to the dataset
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
+  isotropic_norm: false
   # kwargs
   lmax_attr: 1
   lmax_hidden: 1
@@ -27,13 +28,13 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: ${..scheduler.init_value}
+  lr: 1e-3
   weight_decay: 1.e-8
 
 scheduler:
   _target_: src.utils.schedulers.ExpDecayLR
   _partial_: true
-  init_value: 1.0e-3
+  init_value: ${..optimizer.lr}
   transition_steps: 250_000
   decay_rate: 0.1
   end_value: 1.0e-6

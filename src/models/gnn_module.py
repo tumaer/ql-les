@@ -1,17 +1,23 @@
-from pathlib import Path
+#src.models.gns_module.py
+from typing import Any, Dict, Tuple
+from functools import partial
+import time
+import pickle
+import os
 
 import torch
+from torch import Tensor
 import torch.nn as nn
-from torch_geometric.nn import radius_graph
-
-from src.utils.data_utils import load_metadata
-from src.utils.nbrs_utils import shift_fn, displ_fn, radius_graph_pbc
-from src.models.components.sph import relax_wrapper
-from src.models.components.gns import EncodeProcessDecode, time_diff
+from src.models.components.gns import get_random_walk_noise_for_position_sequence, EncodeProcessDecode, time_diff
 from src.models.components.segnn import SEGNN, WeightBalancedIrreps, Irreps
+from src.models.base_module import BaseSimulator, BaseLitModule
+from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
+from src.utils.metrics import particle_mse
+from src.utils.eval_utils import eval_rollout
+from src.utils.nbrs_utils import nearest
 
 
-class Simulator(nn.Module):
+class GNNSimulator(BaseSimulator):
     def __init__(
         self,
         model_name,
@@ -25,26 +31,23 @@ class Simulator(nn.Module):
         device,
         alpha_u,
         vel_solver=None,
+        isotropic_norm=False,
         **kwargs  # model specific params
     ):
-        super(Simulator, self).__init__()
+        super().__init__(
+            model_name=model_name,
+            device=device,
+            isotropic_norm=isotropic_norm,
+            noise_std=noise_std,
+            dataset_path=dataset_path,
+        )
         self._num_particle_types = num_particle_types
-        self.noise_std = noise_std
-        self.metadata = load_metadata(Path(dataset_path))
-        self._boundaries = self.metadata["bounds"]
-        self._connectivity_radius = self.metadata["default_connectivity_radius"]
-        self._case = self.metadata["case"]
-        self._pbc = self.metadata["periodic_boundary_conditions"]
-        self._effective_dt = self.metadata["dt"] * self.metadata["write_every"]
-        self._device = device
         self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
         self.alpha_u = alpha_u
         self.vel_solver = vel_solver
-        self.model_name = model_name
         if alpha_u != 0:
             assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
 
-        self.dim = self.metadata["dim"]
         num_vs = input_seq_length - 1
         num_us = input_seq_length if alpha_u != 0 else 0
         
@@ -86,112 +89,27 @@ class Simulator(nn.Module):
                 additional_message_irreps=additional_message_irreps  # 2x0e
             )
         else:
-            raise ValueError(f"Model name {model_name} not recognized.")
-        
-    def set_metadata_device(self, device=None):
-        if device is None:
-            device = self._device
+            raise Warning(f"Model name {model_name} not recognized.")
 
-        # when working with equivariant models, we need to scale dimensions isotropically
-        is_isotropic = True if self.model_name == "segnn" else False
-
-        # box size
-        self._boundaries = (
-            torch.tensor(self.metadata["bounds"], requires_grad=False).float().to(device)
-        )
-        #Subract the ends of the box to get its size (used for PBC)
-        self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
-
-        # v stats
-        va_m = torch.FloatTensor(self.metadata["acc_mean"]).to(device)
-        va_s = torch.FloatTensor(self.metadata["acc_std"]).to(device)
-        vv_m = torch.FloatTensor(self.metadata["vel_mean"]).to(device)
-        vv_s = torch.FloatTensor(self.metadata["vel_std"]).to(device)
-        if is_isotropic:
-            va_m = va_m.mean() * torch.ones_like(va_m)
-            va_s = va_s.mean() * torch.ones_like(va_s)
-            vv_m = vv_m.mean() * torch.ones_like(vv_m)
-            vv_s = vv_s.mean() * torch.ones_like(vv_s)
-        self.normalization_stats = {
-                "v_acceleration": {"mean": va_m, "std": torch.sqrt(va_s ** 2 + self.noise_std**2)},
-                "v_velocity": {"mean": vv_m, "std": torch.sqrt(vv_s ** 2 + self.noise_std**2)}
-            }
-        
-        # u stats
-        if self.alpha_u != 0:
-            ua_m = torch.FloatTensor(self.metadata["au_mean"]).to(device)
-            ua_s = torch.FloatTensor(self.metadata["au_std"]).to(device)
-            uu_m = torch.FloatTensor(self.metadata["u_mean"]).to(device)
-            uu_s = torch.FloatTensor(self.metadata["u_std"]).to(device)
-            if is_isotropic:
-                ua_m = ua_m.mean() * torch.ones_like(ua_m)
-                ua_s = ua_s.mean() * torch.ones_like(ua_s)
-                uu_m = uu_m.mean() * torch.ones_like(uu_m)
-                uu_s = uu_s.mean() * torch.ones_like(uu_s)
-            self.normalization_stats["u_acceleration"] = {
-                "mean": ua_m, "std": torch.sqrt(ua_s ** 2 + self.noise_std**2)
-            }
-            self.normalization_stats["u_velocity"] = {
-                "mean": uu_m, "std": torch.sqrt(uu_s ** 2 + self.noise_std**2)
-            }
-    
-    def _norm(self, vel, key):
-        """From displacement of positions `v=x1-x0` to a normal distribution."""
-        # key = "ua/uu/va/vv"
-        kv, ka = key
-        ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
-    
-        stats = self.normalization_stats[f"{kv}_{ka}"]
-        return (vel - stats['mean']) / stats['std']
-
-    def _denorm(self, vel, key):
-        """From a normal distribution to displacement of positions `v=x1-x0`."""
-        kv, ka = key
-        ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
-    
-        stats = self.normalization_stats[f"{kv}_{ka}"]
-        return vel * stats['std'] + stats['mean']
-        
-    def shift_fn(self, r, dr):
-        return shift_fn(r, dr, self._boundaries, self._pbc)
-    
-    def displ_fn(self, r1, r2):
-        return displ_fn(r1, r2, self._boundaries, self._pbc)
-
-    def _u2v(self, u):
-        """Convert velocity `u` to displacement of positoins `v = x1 - x0 = dt * u`."""
-        return self._effective_dt * u
-    
-    def _v2u(self, v):
-        """Convert displacement of positoins `v` to velocity `u = (x1 - x0) / dt`."""
-        return v / self._effective_dt
-
-    def forward(self):
-        pass
 
     def _build_graph_from_raw(
         self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
     ):
+        device = position_sequence.device
         n_total_points = position_sequence.shape[0]
         most_recent_position = position_sequence[:, -1] # (n_nodes, 2)
         v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
         
         # senders and receivers are integers of shape (E,)
 
-        if not pbc:
-            senders, receivers = self._compute_connectivity(
-                most_recent_position, n_particles_per_trajectory, self._connectivity_radius
-            )
-        elif pbc:
-            #Pytorch Geometric Implementation
-            senders, receivers = self._compute_connectivity_pbc_pyg(
-                most_recent_position, n_particles_per_trajectory, self._connectivity_radius
-            )
+        senders, receivers = nearest(
+            most_recent_position, n_particles_per_trajectory, pbc, self._boundaries, cutoff=self._connectivity_radius
+        )
 
         batch_ids = torch.cat([
             torch.LongTensor([i for _ in range(n)])
             for i, n in enumerate(n_particles_per_trajectory)
-        ]).to(self._device)
+        ]).to(device)
         node_features = {"batch_ids": batch_ids}
         
         # Normalized velocity sequence, merging spatial an time axis.
@@ -210,7 +128,7 @@ class Simulator(nn.Module):
             # Normalized clipped distances to lower and upper boundaries.
             # boundaries are an array of shape [num_dimensions, 2], where the second
             # axis, provides the lower/upper bofundaries.
-            boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(self._device) # torch.tensor(self._boundaries, requires_grad=False).float().to(self._device)
+            boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(device)
             distance_to_lower_boundary = (most_recent_position - boundaries[:, 0][None])
             distance_to_upper_boundary = (boundaries[:, 1][None] - most_recent_position)
             distance_to_boundaries = torch.cat([distance_to_lower_boundary, distance_to_upper_boundary], dim=1)
@@ -240,19 +158,6 @@ class Simulator(nn.Module):
             
         return node_features, torch.stack([senders, receivers]), edge_features
 
-    def _compute_connectivity(self, node_features, n_particles_per_trajectory, radius, add_self_edges=True):
-        # handle batches. Default is 2 examples per batch
-        # Specify examples id for particles/points
-        batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory)]).to(self._device)
-        # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
-        edge_index = radius_graph(node_features, r=radius, batch=batch_ids, loop=add_self_edges) # (2, n_edges)
-        receivers = edge_index[0, :]
-        senders = edge_index[1, :]
-        return receivers, senders
-    
-    def _compute_connectivity_pbc_pyg(self, most_recent_position, n_particles_per_trajectory, radius, add_self_edges=True):
-        return radius_graph_pbc(most_recent_position, n_particles_per_trajectory, radius, self._boundaries, add_self_edges)
-    
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
         """
         Decoder postprocessor with PBC support.
@@ -348,51 +253,6 @@ class Simulator(nn.Module):
                     num_steps=self.neuralsph["num_steps"]
                 )
         return new_position
-
-    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps):
-        # This relaxation is the exact same from dataset generation, iff no coarsening."
-
-        # Relax a point cloud using SPH without viscosity, but with transport vel.
-        if not hasattr(self, "_relax_fn"):
-            self._relax_fn = relax_wrapper(
-                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
-                dim=self.metadata["dim"],
-                L=self._boundaries[0].item(),
-                is_physical=True,
-                u_ref=self.metadata["u_ref"],
-                is_tvf=is_tvf,  # our relaxations always use tvf
-                nu=0.0,  # relaxations assume zero velocity, so this term drops
-                box=self._boundaries,
-            )
-
-        dt_factor = dt_factor
-        v = 0.0
-        # r_input = r.detach().clone()
-        for i in range(num_steps):
-            a_temp = self._relax_fn(r, n_part_per_traj) #, verbose=True if (i==num_steps-1) else False)
-            dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
-            r = shift_fn(r, dr)
-            v += dr
-
-        # The following line gives the same v up to >3 digits
-        # v = self.displ_fn(r, r_input)  # v=x1-x0 as defined everywhere else in our code
-        return v, v, r
-
-    def _sph(self, r, n_part_per_traj, u):
-        # Compute NSE right hand side term.
-        if not hasattr(self, "_sph_fn"):
-            self._sph_fn = relax_wrapper(
-                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
-                dim=self.metadata["dim"],
-                L=self._boundaries[0].item(),
-                is_physical=True,
-                u_ref=self.metadata["u_ref"],
-                is_tvf=False,  # our relaxations always use tvf
-                nu=self.metadata["viscosity"],
-                box=self._boundaries,
-            )
-        # pressure term std: 53; viscous term std: 0.059; tvf std: 90
-        return self._sph_fn(r, n_part_per_traj, u)
 
     def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
         if pbc:
@@ -595,3 +455,173 @@ class Simulator(nn.Module):
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             return v_normalized_acceleration
 
+
+class GNNLitModule(BaseLitModule):
+    """A LightningModule for training a Graph Network Simulator (GNS) model."""
+
+    def __init__(
+        self,
+        net: torch.nn.Module,
+        accelerator: torch.device,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler,
+        visualize: Dict[str, Dict[str, Any]] = None,
+        compile: bool = False,
+        seed: int = 0,
+        pushforward: Dict[str, Any] = None,
+        neuralsph: Dict[str, Any] = None,
+        num_rollout_steps: int = 1,
+        vel_solver: str = "simple",
+        alpha_u: float = 1.0,
+        alpha_v: float = 1.0,
+        active_metrics: Dict[str, Any] = None,
+        metric_space: Dict[str, str] = "norm",
+    ) -> None:
+        """Initialize the GNS model's LightningModule.
+
+        :param net: The GNS model to train.
+        :param optimizer: The optimizer to use for training.
+        :param scheduler: The learning rate scheduler to use for training.
+        """
+        super().__init__(
+            net = net,
+            accelerator = accelerator,
+            optimizer = optimizer,
+            scheduler = scheduler,
+            visualize = visualize,
+            compile = compile,
+            seed = seed,
+            neuralsph = neuralsph,
+            num_rollout_steps = num_rollout_steps,
+            active_metrics = active_metrics,
+            metric_space = metric_space,
+        )
+
+        # Loss weights
+        self.alpha_u = alpha_u
+        self.alpha_v = alpha_v
+
+        if (alpha_u != 0.0) and ("KOLM" not in self.net._case):
+            raise NotImplementedError(
+                "Alpha_u > 0.0 is only implemented for the Kolmogorov dataset."
+            )
+        # Push forward configuration
+        self.seed = seed
+        self.pushforward = pushforward
+        if (self.pushforward is not None) and (self.alpha_u != 0.0):
+            raise NotImplementedError(
+                "Pushforward is only implemented for alpha_u = 0.0, i.e. LagrangeBench setting."
+            )
+        
+        # Number of eval steps
+        self.vel_solver = vel_solver
+
+    def forward(self, features: Dict[str, Tensor]) -> Tensor:
+        return self.net.predict_accelerations(**features)
+    
+    def model_step(self, batch: Any) -> Tensor:
+        """Forward pass through the model and compute the loss for a_u and a_v."""
+        # Determine the number of pushforward steps, if applicable
+        unroll_steps = 0
+        if self.global_step != 0 and self.pushforward is not None:
+            updated_seed, unroll_steps = pushforward_sample_steps(
+                seed=self.seed, step=self.global_step, pushforward=self.pushforward
+            )
+            self.seed = updated_seed
+        #Random walk noise
+        position_sequence_noise = get_random_walk_noise_for_position_sequence(
+            position_sequence=batch.enc_pos, 
+            boundaries=self.net._boundaries,
+            noise_std_last_step=self.net.noise_std,
+            ).to(self.device)
+
+        non_kinematic_mask = (batch.particle_types != 3).clone().detach()
+        position_sequence_noise *= non_kinematic_mask.view(-1, 1, 1)
+        if not self.training:
+            position_sequence_noise *= 0.0
+        
+        # Prepare features for the forward pass
+        features = {
+            "next_position": batch.target_pos[:, 0],  # Only the first target position
+            "position_sequence": batch.enc_pos,
+            "n_particles_per_trajectory": batch.n_particles_per_trajectory,
+            "particle_types": batch.particle_types,
+            "pbc": any(self.net._pbc),
+            "position_sequence_noise": position_sequence_noise,
+        }
+        if self.pushforward is not None:
+            features["normalization_stats"] = self.net.normalization_stats
+            features["boundaries"] = self.net._boundaries,
+        if self.alpha_u != 0.0:
+            features["u_velocity"] = batch.enc_u
+            features["next_u_velocity"] = batch.target_u
+
+        # Perform pushforward if unroll_steps > 0
+        if unroll_steps > 0:
+             # print(f"Pushing forward {unroll_steps} steps!!!")
+            target_positions = batch.target_pos
+            pred, target = pushforward_fn(features, target_positions, unroll_steps, self.forward)
+        else:
+            # Forward pass
+            # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
+            pred, target = self.forward(features)
+            
+        if self.alpha_u != 0.0:
+            # Split predictions and targets into a_u and a_v
+            a_v_pred, a_u_pred = pred
+            a_v_target, a_u_target = target
+
+            # Calculate MSE loss
+            loss_v = particle_mse(a_v_pred, a_v_target, non_kinematic_mask)
+            loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
+            self.log("train/loss_u", loss_u, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
+            self.log("train/loss_v", loss_v, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
+
+            # Weighted combined loss
+            loss = self.alpha_v * loss_v + self.alpha_u * loss_u
+        else:
+            # Calculate loss
+            loss = particle_mse(pred, target, non_kinematic_mask)
+
+        return loss
+
+    def validation_step(self, batch: Tuple[Tensor, Tensor], **kwargs) -> Dict[str, Tensor]:
+        """Perform a single validation step, using the forward method to infer positions."""
+        #ROLLOUT EVALUATION
+        # Evaluate validation loss, meaning a N-Step rollout
+        is_test = (("testing" in kwargs) and kwargs["testing"])
+        split = "test" if is_test else "val"
+        self.net.neuralsph=self.neuralsph[split]
+        loss = eval_rollout(
+            batch=batch,
+            simulator=self.net, 
+            metadata=self.net.metadata, 
+            num_rollout_steps=self.num_rollout_steps,
+            pbc=any(self.net._pbc), 
+            device=self.net._device,
+            active_metrics=self.active_metrics,
+            vis_config=self.visualize[f"vis_{split}"],
+            trajectory_idx=self.trajectory_idx,
+            u_vel=True if self.alpha_u != 0.0 else False,
+            metric_space=self.metric_space.test if is_test else self.metric_space.val,
+        )
+
+        kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
+        if self.alpha_u != 0.0:
+            position_loss, u_vel_loss = loss
+            self.log(f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)
+            self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
+        else:
+            position_loss = loss
+            self.log(f"{split}/loss", position_loss["mse"].mean(), **kwargs_log)
+            # for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
+            #     self.log(f"val/{k}", position_loss[k].mean(), **kwargs_log)
+            #     self.log(f"val/{k}std", position_loss[k].std(), **kwargs_log)
+    
+        self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
+        self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
+        if "mse_pos" in position_loss:
+            self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
+
+        self.metrics_dump[self.trajectory_idx] = loss
+        self.trajectory_idx += 1
