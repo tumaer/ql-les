@@ -67,7 +67,6 @@ def eval_rollout(
             trajectory_rollout, ground_truth_positions = rollout, ground_truth
             kwargs_write = {}
         else:
-            
             trajectory_rollout, u_vel_rollout = rollout
             ground_truth_positions, ground_truth_u_velocity = ground_truth
             kwargs_write = {
@@ -135,7 +134,8 @@ def eval_single_rollout(
         
         computed_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, metric_space=metric_space
+            features["bounds"], pbc=pbc, metric_space=metric_space,
+            most_recent_position=features["enc_pos"][:,-1],
         )
                 
         return computed_metrics, trajectory_rollout, ground_truth_positions
@@ -178,9 +178,11 @@ def eval_single_rollout(
 
         computed_position_metrics = compute_metrics(
             position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, u_vel=True, metric_space=metric_space
+            features["bounds"], pbc=pbc, u_vel=True, metric_space=metric_space,
+            most_recent_position=features["enc_pos"][:,-1],
         )
         # print(computed_position_metrics["mse"])
+        # TODO: eval u metrics on grid!
         computed_vel_metrics = (du ** 2).mean(dim=(1, 2))
         # print(computed_vel_metrics)
         # import matplotlib.pyplot as plt
@@ -368,7 +370,8 @@ def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:
     wandb_run_id = None
     for x_logger in logger:
         if isinstance(x_logger, WandbLogger):
-            wandb_run_id = x_logger.experiment.id  # Access WandB run ID
+            # wandb_run_id = x_logger.experiment.id  # Access WandB run ID
+            wandb_run_id = x_logger.save_dir[-19:]  # use same date_time dir name as wandb log
 
     # Update the config paths if a WandB run ID is available
     if wandb_run_id:

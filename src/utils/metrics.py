@@ -6,7 +6,7 @@ from src.utils.nbrs_utils import wrap_displacement
 
 def compute_metrics(
     predictions, targets, metadata, active_metrics, boundaries, pbc=True, u_vel=False, 
-    metric_space="diff"
+    metric_space="diff", most_recent_position=None,
 ):
     """
     Compute metrics for the given predictions and targets.
@@ -60,8 +60,13 @@ def compute_metrics(
     # plt.grid()
     # plt.savefig("mse_v_p.png")
 
-    v_p = wrap_displacement((predictions[1:] - predictions[:-1]), boundaries)
-    v_t = wrap_displacement((targets[1:] - targets[:-1]), boundaries)
+    if most_recent_position is not None:  # consider very fist 'v' 
+        ext_predictions = torch.cat([most_recent_position.unsqueeze(0), predictions], dim=0)
+        ext_targets = torch.cat([most_recent_position.unsqueeze(0), targets], dim=0)
+    else:  # ignore the first 'v' for len(loss) = traj_len - 1
+        ext_predictions, ext_targets = predictions, targets
+    v_p = wrap_displacement((ext_predictions[1:] - ext_predictions[:-1]), boundaries)
+    v_t = wrap_displacement((ext_targets[1:] - ext_targets[:-1]), boundaries)
     dv = v_p - v_t  # difference space
     if metric_space == "norm":
         dv /= torch.tensor(metadata["vel_std"], device=dv.device)
@@ -86,7 +91,7 @@ def compute_metrics(
                     computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range
         elif metric_name == "e_kin":
             computed_metrics["e_kin"] = compute_kinetic_energy(
-                predictions, targets, boundaries, metadata
+                ext_predictions, ext_targets, boundaries, metadata
             )
         elif metric_name == "mse_pos":
             loss = (d_pos **2).mean(dim=(1, 2))

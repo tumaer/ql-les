@@ -128,8 +128,8 @@ def main():
         
         # Hardcode the task name to eval
         ckpt_cfg["task_name"] = "eval"
-        ckpt_cfg.pop("train")  # ot set to False
-        ckpt_cfg.pop("test")  # ot set to True
+        ckpt_cfg.pop("train")  # or set to False
+        ckpt_cfg.pop("test")  # or set to True
         
         experiment = next((line.split("=")[1].strip() for line in overrides if "experiment=" in line))
         if not experiment:
@@ -140,17 +140,21 @@ def main():
         hydra.initialize(config_path="../configs", version_base="1.3")
         experiment_cfg = hydra.compose(
             config_name="eval_default.yaml", 
-            overrides=[f"experiment={experiment[:-5]}"],
+            overrides=[f"experiment={experiment}"],
         )
         OmegaConf.set_struct(experiment_cfg, False)  # allow adding new keys
         cfg = OmegaConf.merge(experiment_cfg, ckpt_cfg, cli_overrides)
 
         # record logs during testing
-        test_logs = os.path.join(ckpt_root, "logs")
+        try:
+            test_logs = os.path.join(cli_overrides.model.visualize.vis_test.rollout_dir, "logs")
+        except Exception:
+            test_logs = os.path.join(ckpt_root, "rollout_logs")
         os.makedirs(test_logs, exist_ok=True)
         # The following two depend on the hydra run path, which we do not have
         cfg.paths.output_dir = test_logs
         cfg.paths.work_dir = test_logs
+        cfg.paths.log_dir = test_logs
     else:
         raise NotImplementedError(
             "'experiment' cannot be specified! It is inferred from the checkpoint."
