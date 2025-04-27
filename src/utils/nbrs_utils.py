@@ -1,7 +1,33 @@
+import warnings
 import copy
 import torch
 import numpy as np
-from torch_geometric.nn import radius_graph
+from torch_geometric.nn import radius_graph, radius, knn, knn_graph
+
+
+def gen_grid_points(n, box_size):
+    """Generate cartesian grid points.
+    
+    Args:
+        n (list): List of shape (D,) with number of points in each dimension.
+        box_size (list): Size of the box in each dimension. Starting at 0.
+    
+    Returns:
+        Cartesian grid points of shape (**n, D).
+    """
+    dim = len(n)
+    dx = [box_size[i] / n[i] for i in range(dim)]
+    import numpy as np
+    tx = np.linspace(0, box_size[0], n[0], endpoint=False) + dx[0] / 2
+    ty = np.linspace(0, box_size[1], n[1], endpoint=False) + dx[1] / 2
+    if dim == 2:
+        grid = np.meshgrid(tx, ty, indexing="ij")
+    elif dim == 3:
+        tz = np.linspace(0, box_size[2], n[2], endpoint=False) + dx[2] / 2
+        grid = np.meshgrid(tx, ty, tz, indexing="ij")
+
+    grid = np.stack(grid, axis=-1).astype(np.float32)
+    return grid 
 
 
 def pos_init_cartesian_2d(box_size: np.ndarray, dx: float):
@@ -68,64 +94,270 @@ def displ_fn(r1, r2, box=None, pbc=False):
         return r1 - r2
 
 
-def radius_graph_pbc(most_recent_position, n_particles_per_trajectory, radius, box, add_self_edges=True):
-    #Default is 2 examples per batch
-    # radius = radius + 0.00001 # radius_graph takes r < radius not r <= radius
-    n_particles_copy = copy.deepcopy(n_particles_per_trajectory)
-    combined_positions, n_particles_per_trajectory_combined = pbc_duplication(most_recent_position, n_particles_copy, box)
-    batch_ids = torch.cat([torch.LongTensor([i for _ in range(n)]) for i, n in enumerate(n_particles_per_trajectory_combined)]).to(most_recent_position.device)
-    edge_index = radius_graph(x=combined_positions, r=radius, batch=batch_ids, loop=add_self_edges)# (2, n_edges)
-    # Filter edges to only keep those where the source is in the original frame
-    original_frame_size = most_recent_position.size(0)
-    is_from_original = edge_index[0] < original_frame_size #Mask all particles not from the original frame
-    filtered_edge_index = edge_index[:, is_from_original]
-    # filtered_edge_index = filtered_edge_index[1, :] % frame_tensor.size(0)
-    filtered_edge_index = filtered_edge_index % most_recent_position.size(0)
-    sorted_receiver, order = filtered_edge_index[1,:].sort()
-    filtered_edge_index[1,:] = sorted_receiver
-    filtered_edge_index[0,:] = filtered_edge_index[0,:][order]
-    receivers = filtered_edge_index[0, :]
-    senders = filtered_edge_index[1, :]
-    return receivers, senders
+def _nearest_batch(
+    x, n_particles_per_trajectory, 
+    condition="radius", cutoff=None, k=None, add_self_edges=True, query=None, n_pptr_query=None
+    ):
+    device = x.device
+    batch_ids = torch.cat([
+        torch.full((n,), i, dtype=torch.long, device=device)
+        for i, n in enumerate(n_particles_per_trajectory)
+    ])
+    if query is not None:
+        batch_y = torch.cat([
+            torch.full((n,), i , dtype=torch.long, device=device)
+            for i, n in enumerate(n_pptr_query)
+        ])
+        if condition == "radius":
+            k = k if k is not None else 100
+            edge_index = radius(x=x, y=query, r=cutoff, batch_x=batch_ids, batch_y=batch_y, max_num_neighbors=k)
+        elif condition == "knn":
+            edge_index = knn(x=x, y=query, k=k, batch_x=batch_ids, batch_y=batch_y)
+    else:
+        # this implementation is eventually faster than setting query=x
+        if condition == "radius":
+            k = k if k is not None else 100
+            edge_index = radius_graph(x, r=cutoff, batch=batch_ids, loop=add_self_edges, max_num_neighbors=k)
+        elif condition == "knn":
+            edge_index = knn_graph(x, k=k, batch=batch_ids, loop=add_self_edges)
+        # both `_graph` functions flip the order of senders/receivers. This matter in knn
+        edge_index = torch.flip(edge_index, dims=[0])
+    return edge_index
 
 
-def pbc_duplication(most_recent_positions, n_particles_per_trajectory_combined, domain_size):
-    """
-    Apply periodic boundary condition duplication based on the specified PBC list.
+def _nearest_batch_pbc(
+    x, n_particles_per_trajectory, box, 
+    condition="radius", cutoff=None, k=None, add_self_edges=True, query=None, n_pptr_query=None
+    ):
+    if not add_self_edges:
+        raise NotImplementedError("Self edges are always considered for now")
+
+    device = x.device
+    combined_positions, num_copies = pbc_duplication(x, box, n_particles_per_trajectory)
+    
+    # Assign batch IDs for original and duplicated points
+    batch_x = torch.cat([
+        torch.full((n * num_copies,), i, dtype=torch.long, device=device)
+        for i, n in enumerate(n_particles_per_trajectory)
+    ])
+
+    if query is not None:
+        batch_y = torch.cat([
+            torch.full((n,), i, dtype=torch.long, device=device)
+            for i, n in enumerate(n_pptr_query)
+        ])  
+    else:
+        batch_y = torch.cat([
+            torch.full((n,), i, dtype=torch.long, device=device)
+            for i, n in enumerate(n_particles_per_trajectory)
+        ])
+        query = x
+        n_pptr_query = n_particles_per_trajectory
+        
+    # Compute connectivity graph from duplicated (x) to original (y)
+    if condition == "radius":
+        k = k if k is not None else 100
+        edge_index = radius(
+            x=combined_positions,
+            y=query,
+            r=cutoff,
+            batch_x=batch_x,
+            batch_y=batch_y,
+            max_num_neighbors=k
+        )
+    elif condition == "knn":
+        edge_index = knn(
+            x=combined_positions,
+            y=query,
+            k=k,
+            batch_x=batch_x,
+            batch_y=batch_y
+        )  # first list is sorted
+        if (n_particles_per_trajectory <= k).any():
+            warnings.warn("If number of points < k, there will be duplicate edges.")
+
+    # Correct edge_index[1] to wrap indices *within each batch*
+    cum_counts = torch.cat([
+        torch.tensor([0], device=device), 
+        torch.cumsum(n_pptr_query, dim=0)
+    ])
+    for i in range(len(n_particles_per_trajectory)):
+        start, end = cum_counts[i], cum_counts[i + 1]
+        mask = (edge_index[0] >= start) & (edge_index[0] < end)  # edge_index[0] is sorted
+        local_idx = edge_index[1][mask] - start
+        edge_index[1][mask] = (local_idx % n_particles_per_trajectory[i]) + start
+
+    return edge_index
+
+
+def pbc_duplication(x, box, n_particles_per_trajectory):
+    """Apply periodic boundary condition duplication.
 
     Args:
-        most_recent_positions (torch.Tensor): Tensor of positions with shape [N, D].
-        domain_size (torch.Tensor): Tensor of domain size for each dimension with shape [D].
-        pbc (list of bool): List of boolean values indicating whether PBC should be applied for each dimension.
+        x (torch.Tensor): Tensor of shape (N, D) containing concatenated 
+            positions for all batch elements.
+        box (torch.Tensor): Tensor of shape (D,) representing the box size for 
+            periodic shifts.
+        n_particles_per_trajectory (torch.Tensor): Tensor of shape (B,) containing 
+            the number of particles per batch item.
 
     Returns:
-        torch.Tensor: Combined positions with periodic boundary duplication applied.
+        torch.Tensor: Combined positions x of shape (N * num_copies, D).
+        int: Number of copies created for periodic duplication.
     """
+    device = x.device
+    ndim = x.size(1)
+    # Shifts in -1, 0, +1 for each axis
+    shifts = torch.stack(torch.meshgrid(
+        *[torch.tensor([-1, 0, 1], device=device) for _ in range(ndim)],
+        indexing="ij"
+    ), dim=-1).reshape(-1, ndim)  # (num_copies, D)
+    num_copies = shifts.size(0)
+
+    box = torch.tensor(box, dtype=x.dtype, device=x.device) 
+
+    combined = []
+    start = 0
+    for n in n_particles_per_trajectory:
+        # shift each trajectory independently
+        combined.extend([x[start:start + n] + shift * box for shift in shifts])
+        start += n
+    combined_positions = torch.cat(combined, dim=0)
+    return combined_positions, num_copies
+
+
+def nearest(x, n_particles_per_trajectory, pbc=False, box=None, **kwargs):
+    """Wrapper function for _nearest_batch or _nearest_batch_pbc.
     
-    D = most_recent_positions.size(1)  # Number of spatial dimensions
-    if D == 2:
-        pbc = [True, True]
-        n_particles_per_trajectory_combined *= 9
+    Args:
+        x (torch.Tensor): Tensor of shape (N, D) containing
+            concatenated positions for all batch elements.
+        n_particles_per_trajectory (torch.Tensor): Tensor of shape (B,) containing
+            the number of particles per batch item.
+        pbc (bool, optional): Whether to use periodic boundary conditions.
+        box (torch.Tensor, optional): Box size for periodic boundary conditions.
+        **kwargs: Additional arguments for the _nearest_batch or _nearest_batch_pbc functions.
+        
+    kwargs:
+        condition (str, optional): Condition for neighbor search, either "radius" or "knn".
+            If "radius", the cutoff is used as the radius. If "knn", the cutoff is used as K.
+        cutoff (float, optional): Cutoff distance for radius graph.
+        k (int, optional): K in K-NN. 
+        add_self_edges (bool, optional): Whether to include self edges in the graph. Not used with query.
+        query (torch.Tensor, optional): Tensor of shape (M, D) containing query points.
+            If None, the search is performed on the x tensor itself.
+        n_pptr_query (torch.tensor, optional): Tensor of shape (B,) containing the number
+            of particle per batch of the query items.
+        
+    Returns:
+        torch.Tensor: Edge indices of shape (2, E) with [sorted receivers, senders].
+    """
+    assert x.ndim == 2, "positions x must be a matrix"
+    assert x.shape[1] in [2, 3], "positions x must be 2D or 3D"
+    assert n_particles_per_trajectory.ndim == 1, "n_particles_per_trajectory must be a vector"
+    if "query" in kwargs and kwargs["query"] is not None:
+        assert "n_pptr_query" in kwargs, "n_pptr_query must be specified if query is not None"
 
-    elif D == 3:
-        pbc = [True, True, True]
-        n_particles_per_trajectory_combined *= 27
+    condition= kwargs.get("condition", "radius")  # by default, use radius
+    assert condition in ["radius", "knn"], "condition must be either 'radius' or 'knn'"
+    if condition == "knn":
+        assert kwargs["k"] is not None, "k must be provided for knn"
+    elif condition == "radius":
+        assert kwargs["cutoff"] is not None, "cutoff must be provided for radius"
 
-    # Create shifts based on pbc
-    shift_ranges = [
-        [-1, 0, 1] if p else [0] for p in pbc
-    ]
-    shifts = torch.cartesian_prod(*[torch.tensor(r) for r in shift_ranges]).float()
-    shifts = shifts[~torch.all(shifts == 0, dim=1)].to(most_recent_positions.device) # Exclude the center (original frame)
+    if pbc:
+        assert box is not None, "box_size must be provided for periodic boundary conditions"
+        return _nearest_batch_pbc(x, n_particles_per_trajectory, box=box, **kwargs)
+    else:
+        return _nearest_batch(x, n_particles_per_trajectory, **kwargs)
 
-    # Scale shifts by the domain size
-    shifts = (shifts * domain_size).to(most_recent_positions.device)
 
-    # Apply shifts to generate duplicated frames
-    duplicated_frames = torch.cat([
-        most_recent_positions + shift for shift in shifts
-    ], dim=0).to(most_recent_positions.device)  # Shape: [N * len(shifts), D]
+if __name__ == "__main__":
+    # Parameters
+    Nx, L, dim = 4, 2 * np.pi, 2
+    condition = "radius"  # "radius" or "knn"
+    use_query = True  # False or True
+    
+    # Derived parameters
+    dx = L / Nx
+    box_size = np.ones(dim) * L
+    k, cutoff = None, None
+    if condition == "knn":
+        k = 5  # 3 if dim == 2 else 4
+        circle_radius = k ** (1/dim)
+    elif condition == "radius":
+        cutoff = 1.25 * dx
+        circle_radius = cutoff
+    kwargs = {"box": box_size, "condition": condition, "cutoff": cutoff, "k": k}
 
-    # Combine original frame and duplicated frames
-    combined_positions = torch.cat([most_recent_positions, duplicated_frames], dim=0).to(most_recent_positions.device)
-    return combined_positions, n_particles_per_trajectory_combined
+    # Point cloud
+    import random
+    import matplotlib.pyplot as plt
+    random.seed(0)
+    np.random.seed(0)
+    noise = np.random.normal(0, dx/5, (Nx**dim, dim)) 
+    pos_demo = shift_fn(pos_init_cartesian_2d(box_size, dx), noise-dx/2, box_size, pbc=True)
+    pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
+    n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
+    if use_query:
+        query = torch.tensor(pos_init_cartesian_2d(box_size, dx), dtype=torch.float32)
+        n_pptr_query = torch.tensor([len(query)])
+    else:
+        query = n_pptr_query = None
+
+    def plt_nbrs(ax, i, pos_demo, query, nbrs):
+        if use_query:
+            ax.scatter(query[:,0], query[:,1], marker="x", alpha=0.5)
+        # for each neighbor of particle i, draw a line to its neighbors
+        pos_i = pos_demo[i] if query is None else query[i]
+        neighbors = nbrs[1][nbrs[0] == i]
+        for j in neighbors:
+            ax.arrow(x=pos_i[0], y=pos_i[1], dx=pos_demo[j,0]-pos_i[0], dy=pos_demo[j,1]-pos_i[1],
+                head_width=0.1, head_length=0.2, fc='red', ec='red', alpha=0.5, length_includes_head=True)
+        # draw a circle around particle i with cutoff radius
+        for shifts in [[0,0], [0,1], [1,1], [1,0], [1,-1], [0,-1], [-1,-1], [-1,0], [-1,1]]:
+            circle = plt.Circle((pos_i[0] + shifts[0] * box_size[0], pos_i[1] + shifts[1] * box_size[1]), circle_radius, color='r', fill=False)
+            ax.add_artist(circle)
+            if not pbc:
+                break
+        ax.set_xlim(0, L)
+        ax.set_ylim(0, L)
+        ax.set_aspect('equal', adjustable='box')
+        title_str = f"cutoff={cutoff:.3f}" if condition=="radius" else f"k={k}"
+        ax.set_title(f"Particle {i} has {len(neighbors)} neighbors with {title_str}")   
+        
+    ### Test neighbor search without batching
+    for pbc in [False, True]:
+        nbrs = nearest(pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwargs)
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.scatter(pos_demo[:,0], pos_demo[:,1])
+        plt_nbrs(ax, 0, pos_demo, query, nbrs)
+        plt.tight_layout()
+        pbc_lbl = "pbc" if pbc else "nopbc"
+        query_lbl = "_query" if query is not None else ""
+        fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}.png")
+
+    ### Test neighbor search with batching
+    pos_demo_1 = copy.deepcopy(pos_demo)
+    pos_demo_2 = torch.tensor(pos_init_cartesian_2d(box_size/2, dx) - dx/4, dtype=torch.float32)
+    pos_s = [pos_demo_1, pos_demo_2]
+    n_part_per_traj = torch.tensor([pos_demo_1.shape[0], pos_demo_2.shape[0]], dtype=torch.int64)
+    pos_demo = torch.cat([pos_demo, pos_demo_2], dim=0)
+    if use_query:
+        query = query.repeat(2, 1)
+        n_pptr_query = n_pptr_query.repeat(2)
+
+    # Same as above, but two scatter plots for each point cloud in the batch
+    for pbc in [False, True]:
+        nbrs = nearest(pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwargs)
+
+        fig, axs = plt.subplots(1, 2, figsize=(10, 5.5))
+        for ind, i in enumerate([0, len(pos_demo_1)]): # first particle in each batch
+            ax = axs[ind]
+            ax.scatter(pos_s[ind][:,0], pos_s[ind][:,1])
+            plt_nbrs(ax, i, pos_demo, query, nbrs)
+        plt.tight_layout()
+        pbc_lbl = "pbc" if pbc else "nopbc"
+        query_lbl = "_query" if query is not None else ""
+        fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}_batch.png")

@@ -1,13 +1,11 @@
 """Utilities for SPH particle relaxation. See Neural SPH (Toshev et al., 2024)."""
 
-import jax.numpy as jnp
 import numpy as np
 import torch
 from torch_scatter import scatter_add
-from torch_geometric.nn import radius_graph
 
 from src.utils.nbrs_utils import (
-    pos_init_cartesian_2d, shift_fn, displ_fn, radius_graph_pbc
+    pos_init_cartesian_2d, shift_fn, displ_fn, nearest
 )
 
 
@@ -118,10 +116,7 @@ def relax_wrapper(
 
         r = normalize_length(r)
 
-        if pbc:
-            edge_index = radius_graph_pbc(r, n_part_per_traj, kernel_fn.cutoff, box)
-        else:
-            edge_index = radius_graph(r, r=kernel_fn.cutoff, loop=False)
+        edge_index = nearest(r, n_part_per_traj, pbc, box, cutoff=kernel_fn.cutoff)
         i_s, j_s = edge_index
         # print(i_s[j_s==0].sort()[0])
         # print(sum(i_s!=len(r)))
@@ -177,46 +172,44 @@ def relax_wrapper(
 
 
 if __name__ == "__main__":
-    pass
+    Nx, L, dim = 16, 2 * np.pi, 2
+    dx = L / Nx
+    box_size = np.ones(dim) * L
+    u_ref = 7.0
+    dt = 0.0005
+    torch.set_printoptions(precision=8)
 
-    # Nx, L, dim = 16, 2 * np.pi, 2
-    # dx = L / Nx
-    # box_size = np.ones(dim) * L
-    # u_ref = 7.0
-    # dt = 0.0005
-    # torch.set_printoptions(precision=8)
+    import random
+    random.seed(0)
+    np.random.seed(0)
+    noise = np.random.normal(0, dx/10, (Nx**dim, dim)) 
+    pos_demo = pos_init_cartesian_2d(box_size, dx) + noise
+    pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
+    # print(pos_demo[:10])
 
-    # import random
-    # random.seed(0)
-    # np.random.seed(0)
-    # noise = np.random.normal(0, dx/10, (Nx**dim, dim)) 
-    # pos_demo = pos_init_cartesian_2d(box_size, dx) + noise
-    # pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
-    # # print(pos_demo[:10])
-
-    # is_tvf = False
-    # nu = 0.0
-    # relax_fn = relax_wrapper(
-    #     Nx=Nx, dim=dim, L=L, is_physical=True, u_ref=u_ref, is_tvf=is_tvf, nu=nu
-    # )
-    # n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
+    is_tvf = False
+    nu = 0.0
+    relax_fn = relax_wrapper(
+        Nx=Nx, dim=dim, L=L, is_physical=True, u_ref=u_ref, is_tvf=is_tvf, nu=nu
+    )
+    n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
         
-    # for _ in range(10):
-    #     if nu != 0.0:
-    #         torch.manual_seed(0)
-    #         u = torch.randn_like(pos_demo)/5 * u_ref
-    #         acc = relax_fn(pos_demo, n_part_per_traj, u=u)
-    #     else:
-    #         acc = relax_fn(pos_demo, n_part_per_traj)
-    #     pos_demo = shift_fn(pos_demo, dt**2 * (2*acc), box=box_size, pbc=True)
+    for _ in range(10):
+        if nu != 0.0:
+            torch.manual_seed(0)
+            u = torch.randn_like(pos_demo)/5 * u_ref
+            acc = relax_fn(pos_demo, n_part_per_traj, u=u)
+        else:
+            acc = relax_fn(pos_demo, n_part_per_traj)
+        pos_demo = shift_fn(pos_demo, dt**2 * (2*acc), box=box_size, pbc=True)
     
     
-    ### Validate QuinticKernel
-    # a = torch.linspace(0,0.4,100)
-    # w = QuinticKernel(h=0.1).w(a)
-    # g = QuinticKernel(h=0.1).grad_w(a)
-    # import matplotlib.pyplot as plt
-    # fig, axs = plt.subplots(1, 2)
-    # axs[0].plot(a,w)
-    # axs[1].plot(a,g)
-    # fig.savefig("quintic_torch.png")
+    ## Validate QuinticKernel
+    a = torch.linspace(0,0.4,100)
+    w = QuinticKernel(h=0.1).w(a)
+    g = QuinticKernel(h=0.1).grad_w(a)
+    import matplotlib.pyplot as plt
+    fig, axs = plt.subplots(1, 2)
+    axs[0].plot(a,w)
+    axs[1].plot(a,g)
+    fig.savefig("quintic_torch.png")
