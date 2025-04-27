@@ -1,6 +1,6 @@
 # --------- pytorch --------- #
 -f https://download.pytorch.org/whl/cu124
-torch==2.5.1
+torch==2.5.0
 
 torch_geometric==2.6.1
 
@@ -43,3 +43,13 @@ pyvista
 ipython
 # for SEGNN
 e3nn==0.5.5
+
+# --------- for neuraloperator==1.0.2 --------- #
+ruamel.yaml
+configmypy
+tensorly
+tensorly-torch
+torch-harmonics
+opt-einsum
+zarr
+-e ./neuraloperator
