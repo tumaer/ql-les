@@ -1,4 +1,3 @@
-from turtle import pos
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing

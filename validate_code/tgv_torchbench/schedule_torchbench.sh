@@ -1,4 +1,4 @@
-# nohup bash /home/tkalinov/code/sph_les_directory/sph_les/src/validate_code/tgv_torchbench/schedule_torchbench.sh > gns_torch_64.log 2>&1 &
+# nohup bash /home/tkalinov/code/sph_les_directory/sph_les/validate_code/tgv_torchbench/schedule_torchbench.sh > gns_torch_64.log 2>&1 &
 echo "start lagbench validation"
 
 source /home/tkalinov/code/sph_les_directory/sph_les/.venv/bin/activate

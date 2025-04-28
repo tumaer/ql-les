@@ -1,4 +1,4 @@
-#run with  python /home/atoshev/code/lagrangebench/main.py config=./src/validate_code/tgv2d/gns.yaml
+#run with  python /home/atoshev/code/lagrangebench/main.py config=./validate_code/tgv2d/gns.yaml
 extends: LAGRANGEBENCH_DEFAULTS
 
 dataset:

@@ -15,4 +15,4 @@ python src/train.py experiment=gns_tgv2d.yaml \
   ++model.net.noise_std=0 data.shuffle=False
 
 python /home/atoshev/code/lagrangebench/main.py\
-  config=src/validate_code/LB_tgv2d/gns.yaml
+  config=validate_code/LB_tgv2d/gns.yaml

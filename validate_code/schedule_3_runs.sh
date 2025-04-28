@@ -39,7 +39,7 @@ echo "Activating LagrangeBench environment..."
 source /home/atoshev/code/lagrangebench/.venv/bin/activate
 
 echo "Running validation script..."
-python /home/atoshev/code/lagrangebench/main.py config=/home/tkalinov/code/sph_les_directory/sph_les/src/validate_code/LB_tgv2d/gns.yaml
+python /home/atoshev/code/lagrangebench/main.py config=/home/tkalinov/code/sph_les_directory/sph_les/validate_code/LB_tgv2d/gns.yaml
 
 echo "Validation run completed."
 deactivate
