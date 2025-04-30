@@ -80,7 +80,7 @@ alpha_v: 1.0
 visualize:
   vis_test:
     out_type: "none" # "none", "vtk", "pkl"
-    rollout_dir: "${paths.log_dir}/rollouts/wandb_id/test" #interpolation of the ID is done in the main script
+    rollout_dir: "${paths.log_dir}/train/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
   vis_val:
     out_type: "none" # "none", "vtk", "pkl"
     rollout_dir: null

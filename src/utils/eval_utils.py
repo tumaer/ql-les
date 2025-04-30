@@ -269,6 +269,8 @@ def write_rollout(
                         "r": example_rollout_dict["predicted_rollout"][k],
                         "tag": example_rollout_dict["particle_types"],
                     }
+                    if u_vel:
+                        state_vtk["u"] = example_rollout_dict["predicted_u_vel"][k]
                     write_vtk(state_vtk, f"{file_prefix}_{k}.vtk")
                 for k in range(ground_truth_rollout.shape[0]):
                     # Ground truth reference
@@ -276,6 +278,8 @@ def write_rollout(
                         "r": example_rollout_dict["ground_truth_rollout"][k],
                         "tag": example_rollout_dict["particle_types"],
                     }
+                    if u_vel:
+                        ref_state_vtk["u"] = example_rollout_dict["ground_truth_u_vel"][k]
                     write_vtk(ref_state_vtk, f"{file_prefix}_ref_{k}.vtk")
             elif out_type == "pkl":
                 filename = f"{file_prefix}.pkl"
@@ -376,6 +380,6 @@ def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:
     # Update the config paths if a WandB run ID is available
     if wandb_run_id:
         if cfg.model.visualize.vis_test.rollout_dir:
-            cfg.model.visualize.vis_test.rollout_dir = cfg.model.visualize.vis_test.rollout_dir.replace("wandb_id", wandb_run_id)
+            cfg.model.visualize.vis_test.rollout_dir = cfg.model.visualize.vis_test.rollout_dir.replace("WANDB_ID", wandb_run_id)
         if cfg.model.visualize.vis_val.rollout_dir:
-            cfg.model.visualize.vis_val.rollout_dir = cfg.model.visualize.vis_val.rollout_dir.replace("wandb_id", wandb_run_id)
+            cfg.model.visualize.vis_val.rollout_dir = cfg.model.visualize.vis_val.rollout_dir.replace("WANDB_ID", wandb_run_id)
