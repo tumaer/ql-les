@@ -1,24 +1,20 @@
 """Dataset modules for loading HDF5 simulation trajectories."""
+
 from __future__ import print_function
 import enum
 import bisect
 import importlib
 import json
-import os
 import os.path as osp
 import re
 import warnings
-import zipfile
 from typing import Optional
 
 import h5py
 import numpy as np
-import wget
 import torch
 from torch.utils.data import Dataset
-from torch_geometric.data import Data, InMemoryDataset
-
-
+from torch_geometric.data import Data
 
 
 ZENODO_PREFIX = "https://zenodo.org/records/10491868/files/"
@@ -32,6 +28,7 @@ URLS = {
     "ldc3d": f"{ZENODO_PREFIX}3D_LDC_8160_10kevery100.zip",
 }
 
+
 class NodeType(enum.IntEnum):
     """Particle types."""
 
@@ -41,6 +38,7 @@ class NodeType(enum.IntEnum):
     MOVING_WALL = 2
     RIGID_BODY = 3
     SIZE = 9
+
 
 class H5Dataset(Dataset):
     """Dataset for loading HDF5 simulation trajectories.
@@ -88,9 +86,9 @@ class H5Dataset(Dataset):
             dataset_path = self.download(self.name, dataset_path)
 
         assert split in ["train", "valid", "test"]
-        assert (
-            input_seq_length > 1
-        ), "To compute at least one past velocity, input_seq_length must be >= 2."
+        assert input_seq_length > 1, (
+            "To compute at least one past velocity, input_seq_length must be >= 2."
+        )
         self.dataset_path = dataset_path
         self.file_path = osp.join(dataset_path, split + ".h5")
         self.input_seq_length = input_seq_length
@@ -133,18 +131,18 @@ class H5Dataset(Dataset):
             # trajectory becomes:
 
             self.subseq_length = input_seq_length + 1 + extra_seq_length
-            samples_per_traj = self.sequence_length - self.subseq_length + 1 #number of trajectory samples for a given trajectory
+            samples_per_traj = (
+                self.sequence_length - self.subseq_length + 1
+            )  # number of trajectory samples for a given trajectory
 
-            keylens = np.array([samples_per_traj for _ in range(len(self.traj_keys))]) # 
+            keylens = np.array([samples_per_traj for _ in range(len(self.traj_keys))])  #
             self._keylen_cumulative = np.cumsum(keylens).tolist()
 
             self.num_samples = sum(keylens)
             self.getter = self.get_window
 
         else:
-            assert (
-                extra_seq_length > 0
-            ), "extra_seq_length must be > 0 for validation and testing."
+            assert extra_seq_length > 0, "extra_seq_length must be > 0 for validation and testing."
             # Compute the number of splits per validation trajectory. If the length of
             # each trajectory is 1000, we want to compute a 20-step MSE, and
             # intput_seq_length=6, then we should split the trajectory into
@@ -189,11 +187,11 @@ class H5Dataset(Dataset):
     #     return path
 
     def _open_hdf5(self) -> h5py.File:
+        """Open the HDF5 file. Done only once per training/validation/test run."""
         if self.db_hdf5 is None:
             return h5py.File(self.file_path, "r")
         else:
             return self.db_hdf5
-
 
     def get_trajectory(self, idx: int):
         """Get a (full) trajectory and index idx."""
@@ -215,17 +213,17 @@ class H5Dataset(Dataset):
         traj_pos = traj["position"]
         # load and transpose the trajectory
         pos_input = torch.tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
-        
+
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
-        
+
         position_dict = {"position": pos_input, "particle_types": particle_types}
-        
-        #if ds contains physical velocity target
+
+        # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
             u_input_and_target = torch.tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
             position_dict["u"] = u_input_and_target
-        
+
         return position_dict
 
     def get_window(self, idx: int):
@@ -250,18 +248,18 @@ class H5Dataset(Dataset):
         pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))
 
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
-        
+
         position_dict = {"position": pos_input_and_target, "particle_types": particle_types}
-        
-        #if ds contains physical velocity target
+
+        # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
             u_input_and_target = traj_u_vel[el_idx : el_idx + self.subseq_length]
             u_input_and_target = torch.tensor(u_input_and_target.transpose((1, 0, 2)))
             position_dict["u"] = u_input_and_target
-        
+
         return position_dict
-    
+
     def __getitem__(self, idx: int):
         """
         Get a sequence of positions (of size windows) from the dataset at index idx.
@@ -272,25 +270,26 @@ class H5Dataset(Dataset):
                 compute the target acceleration.
         """
         position_dict = self.getter(idx)
-        
+
         if "u" in position_dict:
             return Data(
-                enc_pos=position_dict["position"][:, :self.input_seq_length],
-                target_pos=position_dict["position"][:, self.input_seq_length:],
-                enc_u=position_dict["u"][:, :self.input_seq_length],
-                target_u=position_dict["u"][:, self.input_seq_length:],
+                enc_pos=position_dict["position"][:, : self.input_seq_length],
+                target_pos=position_dict["position"][:, self.input_seq_length :],
+                enc_u=position_dict["u"][:, : self.input_seq_length],
+                target_u=position_dict["u"][:, self.input_seq_length :],
                 n_particles_per_trajectory=position_dict["position"].shape[0],
-                particle_types=position_dict["particle_types"]
+                particle_types=position_dict["particle_types"],
             )
         else:
             return Data(
-            enc_pos=position_dict["position"][:, :self.input_seq_length],
-            target_pos=position_dict["position"][:, self.input_seq_length:],
-            n_particles_per_trajectory=position_dict["position"].shape[0],
-            particle_types=position_dict["particle_types"]
+                enc_pos=position_dict["position"][:, : self.input_seq_length],
+                target_pos=position_dict["position"][:, self.input_seq_length :],
+                n_particles_per_trajectory=position_dict["position"].shape[0],
+                particle_types=position_dict["particle_types"],
             )
 
     def __len__(self):
+        """Return the number of samples in the dataset."""
         return self.num_samples
 
 
@@ -321,5 +320,3 @@ def get_dataset_name_from_path(path: str) -> str:
         )
         name = dir
     return name
-
-   

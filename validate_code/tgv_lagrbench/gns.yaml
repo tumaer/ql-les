@@ -5,10 +5,10 @@ dataset:
   src: /home/tkalinov/code/sph_les_directory/sph_les/data/2D_TGV_DEBUG
   name: tgv2d
 
-model: 
+model:
   name: gns
   num_mp_steps: 10
-  latent_dim: 64 
+  latent_dim: 64
   num_mlp_layers: 2
   particle_type_embedding_size: 16
 
@@ -35,7 +35,7 @@ eval:
   n_rollout_steps: 5
 
   rollout_dir: "rollouts"
-  
+
   train:
     n_trajs: 1
     metrics_stride: 1
@@ -48,7 +48,6 @@ eval:
 
 neighbors:
   multiplier: 2.0
-
 
 logging:
   log_steps: 1

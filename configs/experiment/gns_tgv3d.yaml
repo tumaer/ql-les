@@ -16,12 +16,12 @@ model:
   net:
     noise_std: 3.0e-4
   pushforward:
-    steps: [0, 10, 700]   # Training steps unlocking stages
+    steps: [0, 10, 700] # Training steps unlocking stages
     unrolls: #[0, 2, ${max_pushforward_steps}]   # Unroll step options for each stage
       - 0
       - 2
       - ${data.max_pushforward_steps}
-    probs: [7, 2, 1]       # Relative probabilities for each unroll step
+    probs: [7, 2, 1] # Relative probabilities for each unroll step
 
 tags: ["tgv", "gns"]
 

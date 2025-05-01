@@ -1,6 +1,7 @@
-#src/utils/schedulers.py
+# src/utils/schedulers.py
 import math
 from torch.optim.lr_scheduler import _LRScheduler
+
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
     """Linear warmup and cosine annealing scheduler.
@@ -21,11 +22,13 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def set_steps_per_epoch(self, steps_per_epoch):
+        """Make the number of steps per epoch an attribute of the scheduler."""
         self.steps_per_epoch = steps_per_epoch
         self.warmup_steps = self.warmup_epochs * self.steps_per_epoch
         self.max_steps = self.max_epochs * self.steps_per_epoch
 
     def get_lr(self):
+        """Compute the learning rate based on the current step."""
         # The scheduler treats every gradient update as a step if we set
         # lr_scheduler.interval="step" in LighttningModule.configure_optimizers()
         current_step = self.last_epoch + 1
@@ -46,7 +49,16 @@ class ExpDecayLR(_LRScheduler):
     """Based on optax.schedules.exponential_decay.
     https://optax.readthedocs.io/en/latest/api/optimizer_schedules.html#exponential-decay-schedule
     """
-    def __init__(self, optimizer, init_value, transition_steps, decay_rate, transition_begin=0, end_value=0.0):
+
+    def __init__(
+        self,
+        optimizer,
+        init_value,
+        transition_steps,
+        decay_rate,
+        transition_begin=0,
+        end_value=0.0,
+    ):
         """
         rate_factor = ((count - transition_begin) / transition_steps)
         decayed_value = init_value * (decay_rate ** rate_factor)
@@ -67,10 +79,11 @@ class ExpDecayLR(_LRScheduler):
         super().__init__(optimizer)
 
     def _body_fn(self, count):
-        rate_factor = ((count - self.transition_begin) / self.transition_steps)
-        decayed_value = self.init_value * (self.decay_rate ** rate_factor)
+        rate_factor = (count - self.transition_begin) / self.transition_steps
+        decayed_value = self.init_value * (self.decay_rate**rate_factor)
         return max(decayed_value, self.end_value)
-    
+
     def get_lr(self):
+        """Compute the learning rate based on the current step."""
         current_step = self.last_epoch
         return [self._body_fn(current_step)]

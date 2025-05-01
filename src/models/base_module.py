@@ -16,6 +16,8 @@ from src.models.components.sph import relax_wrapper
 
 
 class BaseSimulator(nn.Module):
+    """Base class with common methods for Eulerian and Lagrangian approaches."""
+
     def __init__(
         self,
         model_name,
@@ -39,6 +41,7 @@ class BaseSimulator(nn.Module):
         self.dim = self.metadata["dim"]
 
     def set_metadata_device(self, device=None):
+        """Extract normalization stats and more from metadata, and set device."""
         # TODO: make register buffer
         if device is None:
             device = self._device
@@ -47,8 +50,8 @@ class BaseSimulator(nn.Module):
         self._boundaries = (
             torch.tensor(self.metadata["bounds"], requires_grad=False).float().to(device)
         )
-        #Subract the ends of the box to get its size (used for PBC)
-        self._boundaries = self._boundaries[:,1] - self._boundaries[:,0]
+        # Subtract the ends of the box to get its size (used for PBC)
+        self._boundaries = self._boundaries[:, 1] - self._boundaries[:, 0]
 
         # v stats
         va_m = torch.FloatTensor(self.metadata["acc_mean"]).to(device)
@@ -61,10 +64,10 @@ class BaseSimulator(nn.Module):
             vv_m = vv_m.mean() * torch.ones_like(vv_m)
             vv_s = vv_s.mean() * torch.ones_like(vv_s)
         self.normalization_stats = {
-            "v_acceleration": {"mean": va_m, "std": torch.sqrt(va_s ** 2 + self.noise_std**2)},
-            "v_velocity": {"mean": vv_m, "std": torch.sqrt(vv_s ** 2 + self.noise_std**2)}
+            "v_acceleration": {"mean": va_m, "std": torch.sqrt(va_s**2 + self.noise_std**2)},
+            "v_velocity": {"mean": vv_m, "std": torch.sqrt(vv_s**2 + self.noise_std**2)},
         }
-        
+
         # u stats
         try:
             ua_m = torch.FloatTensor(self.metadata["au_mean"]).to(device)
@@ -77,52 +80,56 @@ class BaseSimulator(nn.Module):
                 uu_m = uu_m.mean() * torch.ones_like(uu_m)
                 uu_s = uu_s.mean() * torch.ones_like(uu_s)
             self.normalization_stats["u_acceleration"] = {
-                "mean": ua_m, "std": torch.sqrt(ua_s ** 2 + self.noise_std**2)
+                "mean": ua_m,
+                "std": torch.sqrt(ua_s**2 + self.noise_std**2),
             }
             self.normalization_stats["u_velocity"] = {
-                "mean": uu_m, "std": torch.sqrt(uu_s ** 2 + self.noise_std**2)
+                "mean": uu_m,
+                "std": torch.sqrt(uu_s**2 + self.noise_std**2),
             }
-        except:
+        except Exception:
             print("No u stats found.")
-    
+
     def _norm(self, vel, key):
         """From displacement of positions `v=x1-x0` to a normal distribution."""
         # key = "ua/uu/va/vv" (uu: velocity u; vv: velocity v; ua/va: acceleration u/v)
         kv, ka = key
         ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
-    
+
         stats = self.normalization_stats[f"{kv}_{ka}"]
-        return (vel - stats['mean']) / stats['std']
+        return (vel - stats["mean"]) / stats["std"]
 
     def _denorm(self, vel, key):
         """From a normal distribution to displacement of positions `v=x1-x0`."""
         kv, ka = key
         ka = {"a": "acceleration", "v": "velocity", "u": "velocity"}[ka]
-    
+
         stats = self.normalization_stats[f"{kv}_{ka}"]
-        return vel * stats['std'] + stats['mean']
-        
+        return vel * stats["std"] + stats["mean"]
+
     def shift_fn(self, r, dr):
+        """Shift the positions `r` by `dr`, respecting potential periodic boundaries."""
         return shift_fn(r, dr, self._boundaries, self._pbc)
-    
+
     def displ_fn(self, r1, r2):
+        """Compute the displacement between two position vectors `r1` and `r2`."""
         return displ_fn(r1, r2, self._boundaries, self._pbc)
 
     def _u2v(self, u):
-        """Convert velocity `u` to displacement of positoins `v = x1 - x0 = dt * u`."""
+        """Convert velocity `u` to displacement of positions `v = x1 - x0 = dt * u`."""
         return self._effective_dt * u
-    
+
     def _v2u(self, v):
-        """Convert displacement of positoins `v` to velocity `u = (x1 - x0) / dt`."""
+        """Convert displacement of positions `v` to velocity `u = (x1 - x0) / dt`."""
         return v / self._effective_dt
 
     def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps):
-        # This relaxation is the exact same from dataset generation, iff no coarsening."
+        """Relax a point cloud in the exact same way as during dataset generation."""
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
         if not hasattr(self, "_relax_fn"):
             self._relax_fn = relax_wrapper(
-                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
+                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
@@ -136,7 +143,9 @@ class BaseSimulator(nn.Module):
         v = 0.0
         # r_input = r.detach().clone()
         for i in range(num_steps):
-            a_temp = self._relax_fn(r, n_part_per_traj) #, verbose=True if (i==num_steps-1) else False)
+            a_temp = self._relax_fn(
+                r, n_part_per_traj
+            )  # , verbose=True if (i==num_steps-1) else False)
             dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
             r = shift_fn(r, dr)
             v += dr
@@ -146,10 +155,11 @@ class BaseSimulator(nn.Module):
         return v, v, r
 
     def _sph(self, r, n_part_per_traj, u):
-        # Compute NSE right hand side term.
+        """Compute the right hand side of the NSE using SPH. Use for NeuralSPH."""
+
         if not hasattr(self, "_sph_fn"):
             self._sph_fn = relax_wrapper(
-                Nx=int(round(r.shape[0])**(1/self.metadata["dim"])),
+                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
@@ -162,10 +172,13 @@ class BaseSimulator(nn.Module):
         return self._sph_fn(r, n_part_per_traj, u)
 
     def forward(self):
+        """Forward pass of the model."""
         pass
 
 
 class BaseLitModule(LightningModule):
+    """Base class for Lightning modules, providing common functionality."""
+
     def __init__(
         self,
         net: torch.nn.Module,
@@ -181,10 +194,10 @@ class BaseLitModule(LightningModule):
         metric_space: Dict[str, str] = "norm",
     ) -> None:
         super().__init__()
-        
+
         # Save hyperparameters and initialize the network
         # For model checkpointing
-        self.save_hyperparameters(logger=False, ignore=['net'])
+        self.save_hyperparameters(logger=False, ignore=["net"])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.neuralsph = neuralsph
 
@@ -193,34 +206,40 @@ class BaseLitModule(LightningModule):
         self.metric_space = metric_space
         self.visualize = visualize
         self.trajectory_idx = 0
-        
+
     def model_step(self):
+        """Batch in, loss out."""
         raise NotImplementedError("model_step method must be implemented.")
-    
+
     def validation_step(self):
+        """Batch in, no return. Log the loss and potentially write trajectory."""
         raise NotImplementedError("validation_step method must be implemented.")
-    
+
     def training_step(self, batch: Any) -> torch.Tensor:
+        """Extend model_step to include logging the loss."""
         # Evaluate the model on the training batch and calculate the loss
         loss = self.model_step(batch)
         # Log metrics
-        self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
-        return loss 
-    
+        self.log("train/loss", loss, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)
+        return loss
+
     def on_validation_start(self) -> None:
+        """Reset trajectory index for writing metrics and trajectories."""
         self.trajectory_idx = 0
         self.metrics_dump = {}
-    
+
     def on_test_start(self):
+        """Reset trajectory index for writing metrics and trajectories."""
         self.net.set_metadata_device(self.net._device)
         self.trajectory_idx = 0
         self.metrics_dump = {}
 
     def on_test_end(self):
+        """Write the metrics to a file after testing."""
         # write full metrics to file
         metrics_path = os.path.join(
             self.visualize.vis_test.rollout_dir,
-            f"metrics_{time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime())}.pkl"
+            f"metrics_{time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime())}.pkl",
         )
         print(f"Writing metrics to {metrics_path}")
         with open(metrics_path, "wb") as f:
@@ -230,11 +249,14 @@ class BaseLitModule(LightningModule):
         """Perform a single test step, using the forward method to infer positions."""
         # Evaluate the trajectory rollout
         self.validation_step(batch, testing=True)
-        
+
     def on_fit_start(self) -> None:
-        self.net.set_metadata_device(self.net._device)    
-    
+        """Set the device of the metadata variables."""
+        self.net.set_metadata_device(self.net._device)
+
     def on_train_epoch_start(self):
+        """Get the learning rate at the start of each epoch."""
+        # TODO: check whether needed
         lr = self.trainer.optimizers[0].param_groups[0]["lr"]
         return lr
 
@@ -246,13 +268,13 @@ class BaseLitModule(LightningModule):
             print("Model compiled!")
 
     def configure_optimizers(self) -> Dict[str, Any]:
+        """Configure the optimizer and learning rate scheduler."""
         # To increment the learning rate at every gradient descent step
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         if self.hparams.scheduler is not None:
             if (type(self.hparams.scheduler) is partial) and (
-                self.hparams.scheduler.func.__name__ in [
-                    "LinearWarmupCosineAnnealingLR", "ExpDecayLR", "StepLR"
-                ]
+                self.hparams.scheduler.func.__name__
+                in ["LinearWarmupCosineAnnealingLR", "ExpDecayLR", "StepLR"]
             ):
                 interval = "step"
                 print("########### step interval ############")

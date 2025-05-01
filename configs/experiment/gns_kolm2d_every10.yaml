@@ -12,7 +12,7 @@ model:
   net:
     noise_std: 1.0e-4
   pushforward: null
-  vel_solver: "simple"  # "simple", "tvf", "neural_sph"
+  vel_solver: "simple" # "simple", "tvf", "neural_sph"
   alpha_u: 1.0
   alpha_v: 1.0
 
@@ -23,4 +23,3 @@ logger:
     project: "kolm2d_every10"
 
 seed: 12345
-

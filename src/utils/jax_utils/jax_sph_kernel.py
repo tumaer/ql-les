@@ -183,7 +183,7 @@ class GaussianKernel(BaseKernel):
 
 
 class SuperGaussianKernel(BaseKernel):
-    # TODO: We want this? Intendent but negativ in some regions
+    # TODO: We want this? Intended but negative in some regions
     """The supergaussian kernel function of Monaghan."""
 
     def __init__(self, h, dim=3):

@@ -8,7 +8,7 @@ python src/train.py experiment=gns_tgv2d.yaml \
   +logger.wandb.name=gns_tgv_val_lagbench, model.alpha_u=0 \
   model.net.vel_solver=simple ++model.pushforward=null ++vars.max_pushforward_steps=0 \
   ++model.net.noise_std=0 data.shuffle=False
-                
+
 python src/train.py experiment=gns_tgv2d.yaml \
   +logger.wandb.name=gns_tgv_val_lagbench, model.alpha_u=0.000001 \
   model.net.vel_solver=simple ++model.pushforward=null ++vars.max_pushforward_steps=0 \

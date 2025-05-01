@@ -1183,36 +1183,6 @@ Other useful repositories:
 </details>
 
 <br>
-
-## License
-
-Lightning-Hydra-Template is licensed under the MIT License.
-
-```
-MIT License
-
-Copyright (c) 2021 ashleve
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-<br>
 <br>
 <br>
 <br>
@@ -1223,7 +1193,7 @@ ______________________________________________________________________
 
 <div align="center">
 
-# Your Project Name
+# Learning Quasi-Lagrangian Turbulence
 
 <a href="https://pytorch.org/get-started/locally/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white"></a>
 <a href="https://pytorchlightning.ai/"><img alt="Lightning" src="https://img.shields.io/badge/-Lightning-792ee5?logo=pytorchlightning&logoColor=white"></a>
@@ -1244,54 +1214,76 @@ What it does
 
 ```bash
 # clone project
-git clone https://github.com/YourGithubName/your-repo-name
-cd your-repo-name
+git clone https://github.com/arturtoshev/sph_les
+cd sph_les
 
-# [OPTIONAL] create conda environment
-conda create -n myenv python=3.9
-conda activate myenv
-
-# install pytorch according to instructions
-# https://pytorch.org/get-started/
+# create virtual environment
+python3.10 -m venv venv
+source venv/bin/activate
 
 # install requirements
 pip install -r requirements.txt
+# install this codebase
+pip install -e .
 ```
 
-#### Conda
+#### Dev
 
 ```bash
-# clone project
-git clone https://github.com/YourGithubName/your-repo-name
-cd your-repo-name
+# first make sure pre-commit is installed
+# then install the pre-commit hooks .pre-commit-config.yaml
+pre-commit install
+# update pre-commit hook versions
+pre-commit autoupdate
+# manually run pre-commit on all files
+pre-commit run -a
 
-# create conda environment and install dependencies
-conda env create -f environment.yaml -n myenv
+# use testing
 
-# activate conda environment
-conda activate myenv
 ```
 
 ## How to run
 
-Train model with default configuration
+Train model with chosen experiment configuration
 
 ```bash
-# train on CPU
-python src/train.py trainer=cpu
-
 # train on GPU
-python src/train.py trainer=gpu
+python src/train.py experiment=gns_kolm2d_every1 trainer=gpu
 ```
 
-Train model with chosen experiment configuration from [configs/experiment/](configs/experiment/)
+## TODOs
 
-```bash
-python src/train.py experiment=experiment_name.yaml
+- adjust `.github/workflows`
+- tests: `pytest`, `pytest tests/test1.py`, `pytest -k “not slow”`
+- multiruns: with `python train.py -m seed=1,2,3,4,5` https://hydra.cc/docs/next/tutorials/basic/running_your_app/multi-run
+- sweeps: `python train.py -m hparams_search=mnist_optuna experiment=example`
+- 6 sequential runs: `python train.py -m data.batch_size=32,64,128 model.lr=0.001,0.0005`
+- Slurm: `override /hydra/launcher@_here_`
+
+## License
+
+This code is licensed under the MIT License.
+
 ```
+MIT License
 
-You can override any parameter from command line like this
+Copyright (c) 2025 arturtoshev
 
-```bash
-python src/train.py trainer.max_epochs=20 data.batch_size=64
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

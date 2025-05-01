@@ -1,28 +1,28 @@
 # configs/model/gns.yaml
 
 # Specify the correct path to the SimulatorLitModule in the Lightning module
-_target_: src.models.gino_module.GINOLitModule  # Adjust this to the actual path for your GNS Lightning module
+_target_: src.models.gino_module.GINOLitModule # Adjust this to the actual path for your GNS Lightning module
 
 net:
   # Specify the correct path to the GNS model implementation (GINOSimulator) within the SimulatorLitModule
-  _target_: src.models.gino_module.GINOSimulator  # Adjust this to the actual path for your GNS simulator model
+  _target_: src.models.gino_module.GINOSimulator # Adjust this to the actual path for your GNS simulator model
   _partial_: true
-  model_name: "gino"  # gino, interp_fno
+  model_name: "gino" # gino, interp_fno
   isotropic_norm: false
-  noise_std: 3.0e-4 
+  noise_std: 3.0e-4
   dataset_path: ${data.data_dir}
   ### GINO kwargs
   in_gno_transform_type: linear
   out_gno_transform_type: linear
-  gno_pos_embed_type: transformer  # "transformer", "nerf"
+  gno_pos_embed_type: transformer # "transformer", "nerf"
   fno_in_channels: ${vars.dim}
   fno_n_modes: [32, 32]
   fno_hidden_channels: 32
   fno_norm: instance_norm
   # projection_channel_ratio: 4
   fno_n_layers: 4
-  fno_implementation: "reconstructed"  # "reconstructed", "factorized"
-  fno_skip: "linear"  # "linear", "soft-gating"
+  fno_implementation: "reconstructed" # "reconstructed", "factorized"
+  fno_skip: "linear" # "linear", "soft-gating"
   # next arguments are for interp_fno
   query_resolution: [64, 64]
   nbrs_condition: knn
@@ -31,7 +31,7 @@ net:
 # Optimizer configuration
 optimizer:
   _partial_: true
-  _target_: torch.optim.AdamW  # SGD with lr=0.03 does pretty well on overfitting
+  _target_: torch.optim.AdamW # SGD with lr=0.03 does pretty well on overfitting
   lr: 1.0e-4
   weight_decay: 1.e-4
 
@@ -70,7 +70,7 @@ neuralsph:
 num_rollout_steps: ${vars.num_rollout_steps}
 active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
-  val: "norm"  # {"phys", "norm", "diff"} = physical, normalized, difference
+  val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
 
 visualize:

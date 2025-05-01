@@ -17,7 +17,7 @@ model:
     particle_type_embedding_size: 16
     noise_std: 1.0e-4
   pushforward: null
-  vel_solver: "simple"  # "simple", "tvf", "neural_sph"
+  vel_solver: "simple" # "simple", "tvf", "neural_sph"
   alpha_u: 0.0
   alpha_v: 1.0
   scheduler:
@@ -28,7 +28,6 @@ model:
   visualize:
     vis_test:
       out_type: "vtk"
-
 
 tags: ["kolm", "gns"]
 
@@ -58,4 +57,3 @@ trainer:
 callbacks:
   early_stopping:
     patience: 50000
-

@@ -84,9 +84,7 @@ def inverse(box: Box) -> Box:
         return 1 / box
     elif box.ndim == 2:
         return jnp.linalg.inv(box)
-    raise ValueError(
-        ("Box must be either: a scalar, a vector, or a matrix. " f"Found {box}.")
-    )
+    raise ValueError((f"Box must be either: a scalar, a vector, or a matrix. Found {box}."))
 
 
 def _get_free_indices(n: int) -> str:
@@ -115,9 +113,7 @@ def raw_transform(box: Box, R: Array) -> Array:
         left_indices = free_indices + "j"
         right_indices = free_indices + "i"
         return jnp.einsum(f"ij,{left_indices}->{right_indices}", box, R)
-    raise ValueError(
-        ("Box must be either: a scalar, a vector, or a matrix. " f"Found {box}.")
-    )
+    raise ValueError((f"Box must be either: a scalar, a vector, or a matrix. Found {box}."))
 
 
 @custom_jvp
@@ -286,9 +282,7 @@ def periodic(side: Box, wrapped: bool = True) -> Space:
     return displacement_fn, shift_fn
 
 
-def periodic_general(
-    box: Box, fractional_coordinates: bool = True, wrapped: bool = True
-) -> Space:
+def periodic_general(box: Box, fractional_coordinates: bool = True, wrapped: bool = True) -> Space:
     """Periodic boundary conditions on a parallelepiped.
 
     This function defines a simulation on a parallelepiped, :math:`X`, formed by
@@ -473,6 +467,5 @@ def canonicalize_displacement_or_metric(displacement_or_metric):
         except ValueError:
             continue
     raise ValueError(
-        "Canonicalize displacement not implemented for spatial dimension larger"
-        "than 4."
+        "Canonicalize displacement not implemented for spatial dimension larger than 4."
     )

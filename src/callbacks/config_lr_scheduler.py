@@ -1,10 +1,12 @@
-#src/callbacks/config_lr_scheduler.py
+# src/callbacks/config_lr_scheduler.py
 from lightning import Callback
+
 
 class ConfigLRScheduler(Callback):
     """Count up every gradient update step rather than every epoch."""
 
     def on_train_start(self, trainer, pl_module):
+        """Called when the training begins."""
         # Access the scheduler from the trainer
         self.scheduler = trainer.lr_scheduler_configs[0].scheduler
         assert self.scheduler.__class__.__name__ == "LinearWarmupCosineAnnealingLR"

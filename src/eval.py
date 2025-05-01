@@ -1,31 +1,11 @@
 from typing import Any, Dict, List, Tuple
-    
+
 import os
 import hydra
 import torch
-import rootutils
 from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig, OmegaConf
-
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-# ------------------------------------------------------------------------------------ #
-# the setup_root above is equivalent to:
-# - adding project root dir to PYTHONPATH
-#       (so you don't need to force user to install project as a package)
-#       (necessary before importing any local modules e.g. `from src import utils`)
-# - setting up PROJECT_ROOT environment variable
-#       (which is used as a base for paths in "configs/paths/default.yaml")
-#       (this way all filepaths are the same no matter where you run the code)
-# - loading environment variables from ".env" in root dir
-#
-# you can remove it if you:
-# 1. either install project as a package or move entry files to project root dir
-# 2. set `root_dir` to "." in "configs/paths/default.yaml"
-#
-# more info: https://github.com/ashleve/rootutils
-# ------------------------------------------------------------------------------------ #
 
 from src.utils import (
     RankedLogger,
@@ -43,14 +23,14 @@ log = RankedLogger(__name__, rank_zero_only=True)
 @task_wrapper
 def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Evaluates given checkpoint on a datamodule testset.
-    
+
     This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
     failure. Useful for multiruns, saving info about the crash, etc.
 
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Tuple[dict, dict] with metrics and dict with all instantiated objects.
     """
-    
+
     assert cfg.ckpt_path, "Checkpoint path must be specified in the config!"
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
@@ -59,21 +39,23 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
 
-    #Replace the wandb id in the config file
+    # Replace the wandb id in the config file
     update_wandb_id(cfg, logger)
-    
+
     log.info(f"Instantiating model <{cfg.model._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.model)
-    
-    checkpoint = torch.load(cfg.ckpt_path, map_location= "cuda" if torch.cuda.is_available() else "cpu")
-    #Compiled models are saved with the prefix "net._orig_mod." in the state_dict keys
+
+    checkpoint = torch.load(
+        cfg.ckpt_path, map_location="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    # Compiled models are saved with the prefix "net._orig_mod." in the state_dict keys
     updated_state_dict = {
-            k.replace("net._orig_mod.", "net."): v for k, v in checkpoint["state_dict"].items()
+        k.replace("net._orig_mod.", "net."): v for k, v in checkpoint["state_dict"].items()
     }
-      
+
     model.load_state_dict(updated_state_dict, strict=False)
     log.info(f"Loaded checkpoint from {cfg.ckpt_path}")
-    
+
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger)
 
@@ -89,49 +71,52 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log_hyperparameters(object_dict)
 
     log.info("Starting testing!")
-    trainer.test(model=model, datamodule=datamodule, ckpt_path=None)  # ckpt_path=None since we manually loaded weights
+    trainer.test(
+        model=model, datamodule=datamodule, ckpt_path=None
+    )  # ckpt_path=None since we manually loaded weights
 
     # for predictions use trainer.predict(...)
     # predictions = trainer.predict(model=model, dataloaders=dataloaders, ckpt_path=cfg.ckpt_path)
 
     metric_dict = trainer.callback_metrics
-    
+
     return metric_dict, object_dict
 
 
 def main():
     """Main entry point for evaluation."""
-    
-    #Capture CLI overrides
+
+    # Capture CLI overrides
     cli_overrides = OmegaConf.from_cli()
     assert "ckpt_path" in cli_overrides, (
         "You must specify the checkpoint path with `ckpt_path=<path_to_ckpt>`"
     )
- 
+
     # print(f"Captured CLI Overrides: {OmegaConf.to_yaml(cli_overrides)}")  # Debugging info
-    
+
     if "experiment" not in cli_overrides:
-        
         ckpt_path = cli_overrides["ckpt_path"]
         ckpt_root = os.path.dirname(os.path.dirname(ckpt_path))
 
         # Checkpoint configs path
         ckpt_cfgs = os.path.join(ckpt_root, ".hydra")
-        
-        #Extract the experiment name from overrides.yaml
+
+        # Extract the experiment name from overrides.yaml
         overrides_path = os.path.join(ckpt_cfgs, "overrides.yaml")
         with open(overrides_path, "r") as f:
             overrides = f.readlines()
-            
+
         # Base cfg path, used to generate the checkpoint
         ckpt_cfg = OmegaConf.load(os.path.join(ckpt_cfgs, "config.yaml"))
-        
+
         # Hardcode the task name to eval
         ckpt_cfg["task_name"] = "eval"
         ckpt_cfg.pop("train")  # or set to False
         ckpt_cfg.pop("test")  # or set to True
-        
-        experiment = next((line.split("=")[1].strip() for line in overrides if "experiment=" in line))
+
+        experiment = next(
+            (line.split("=")[1].strip() for line in overrides if "experiment=" in line)
+        )
         if not experiment:
             raise ValueError("Experiment name not found in overrides.yaml")
 
@@ -139,7 +124,7 @@ def main():
         # Then merge the checkpoint config and CLI overrides.
         hydra.initialize(config_path="../configs", version_base="1.3")
         experiment_cfg = hydra.compose(
-            config_name="eval_default.yaml", 
+            config_name="eval_default.yaml",
             overrides=[f"experiment={experiment}"],
         )
         OmegaConf.set_struct(experiment_cfg, False)  # allow adding new keys
@@ -165,6 +150,7 @@ def main():
     extras(cfg)
 
     evaluate(cfg)
+
 
 if __name__ == "__main__":
     main()

@@ -2,7 +2,6 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 from jax import Array, ops, vmap
-import torch
 from numpy import array
 from scipy.spatial import KDTree
 from jax.scipy.special import factorial
@@ -29,6 +28,7 @@ def read_h5(file_name: str, array_type: str = "jax"):
 
     return data_dict
 
+
 def pos_init_cartesian_2d(box_size: array, dx: float):
     """Create a grid of particles in 2D.
 
@@ -42,10 +42,7 @@ def pos_init_cartesian_2d(box_size: array, dx: float):
     return r
 
 
-
-def mls_2nd_order(
-    r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_factor=None
-):
+def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_factor=None):
     """2nd-order moving least squares interpolation for periodic flows in a
     rectangular box.
 
@@ -69,7 +66,7 @@ def mls_2nd_order(
         h_factor = 0.85 if h_factor is None else h_factor
         kernel_fn = M4PrimeKernel(h=h_factor * dx, dim=dim)
     elif kernel_name == "Quintic":
-        h_factor = 2/3 if h_factor is None else h_factor
+        h_factor = 2 / 3 if h_factor is None else h_factor
         kernel_fn = QuinticKernel(h=h_factor * dx, dim=dim)
     else:
         raise NotImplementedError(f"Kernel {kernel_name} not implemented.")
@@ -150,6 +147,7 @@ def mls_2nd_order(
     f_target = vmap(solve_lin)(mat, vec)
 
     return f_target
+
 
 def pbc_copy_scalar(
     r: array, f: array, box_size: array, halo: float, dim: int, unsorted: bool = True
@@ -252,6 +250,7 @@ def pbc_copy_scalar(
 
 
 def get_real_wavenumber_grid(n, dim):
+    """Get the real wavenumber grid for a given dimension and max wavenumber."""
     Nf = n // 2 + 1
     k = np.fft.fftfreq(n, 1.0 / n)  # for other dimensions
     kx = k[:Nf].copy()
@@ -261,6 +260,7 @@ def get_real_wavenumber_grid(n, dim):
     elif dim == 3:
         k_field = np.array(np.meshgrid(kx, k, k, indexing="ij"), dtype=int)
     return k_field, k
+
 
 def energy_spectrum(vel: Array, mul_fac: float = 1.0, is_scalar_field: bool = False):
     """JAX implemented energy spectrum computation on a grid.
@@ -319,6 +319,7 @@ def energy_spectrum(vel: Array, mul_fac: float = 1.0, is_scalar_field: bool = Fa
 
     return ek
 
+
 class M4PrimeKernel:
     """The M'4 kernel"""
 
@@ -354,18 +355,26 @@ class FourierQuinticKernel:
             self._sigma = 3.0 / 359.0 / jnp.pi * self._one_over_h**3
 
     def w(self, k):
-        q1 = (jnp.exp(-2 * jnp.pi * 1j * k) * (3 * jnp.exp(2 * jnp.pi * 1j * k) * \
-                (44 * jnp.pi**5 * 1j**5 * k**5 - 20 * jnp.pi**3 * 1j**3 * k**3 + 30 * \
-                jnp.pi * 1j * k - 25) - 2 * jnp.pi * 1j * k * ( \
-                jnp.pi * 1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * (26 * jnp.pi * \
-                1j * k - 25) + 10) + 15) - 30) + 75)) / (4 * jnp.pi**6 * 1j**6 * k**6)
-        q2 = (jnp.exp(-4 * jnp.pi * 1j * k) * (-2 * jnp.pi * 1j * k * (jnp.pi * 1j * k * \
-                (jnp.pi * 1j * k * (jnp.pi * 1j * k * (2 * jnp.pi * 1j * k - 5) + 10) - 15) \
-                + 15) + jnp.exp(2 * jnp.pi * 1j * k) * (4 * jnp.pi * 1j * k * (jnp.pi * \
-                1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * (26 * jnp.pi * 1j * k \
-                - 25) + 10) + 15) - 30) + 75) - 75)) / (8 * jnp.pi**6 * 1j**6 * k**6)
-        q3 = (jnp.exp(-6 * jnp.pi * 1j * k) * (jnp.exp(2 * jnp.pi * 1j * k) * (2 * \
-                jnp.pi * 1j * k * (jnp.pi * 1j * k * (jnp.pi * 1j * k * \
-                (jnp.pi * 1j * k * (2 * jnp.pi * 1j * k - 5) + 10) - 15) + 15) - 15) + 15)) \
-                / (8 * jnp.pi**6 * 1j**6 * k**6)
+        pjk = jnp.pi * 1j * k
+        exp = jnp.exp(2 * pjk)
+        q1 = (
+            jnp.exp(-2 * pjk)
+            * (
+                3 * exp * (44 * pjk**5 - 20 * pjk**3 + 30 * pjk - 25)
+                - 2 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30)
+                + 75
+            )
+        ) / (4 * pjk**6)
+        q2 = (
+            jnp.exp(-4 * pjk)
+            * (
+                -2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15)
+                + exp * (4 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30) + 75)
+                - 75
+            )
+        ) / (8 * pjk**6)
+        q3 = (
+            jnp.exp(-6 * pjk)
+            * (exp * (2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15) - 15) + 15)
+        ) / (8 * pjk**6)
         return self._sigma * (q1 + q2 + q3)

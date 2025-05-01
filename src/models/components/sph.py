@@ -4,9 +4,7 @@ import numpy as np
 import torch
 from torch_scatter import scatter_add
 
-from src.utils.nbrs_utils import (
-    pos_init_cartesian_2d, shift_fn, displ_fn, nearest
-)
+from src.utils.nbrs_utils import pos_init_cartesian_2d, shift_fn, displ_fn, nearest
 
 
 EPS = torch.finfo(torch.float32).eps
@@ -26,9 +24,11 @@ class TaitEoS:
         self.gamma = gamma
 
     def p_fn(self, rho):
+        """Compute pressure from density."""
         return self.p_ref * ((rho / self.rho_ref) ** self.gamma - 1) + self.p_bg
 
     def rho_fn(self, p):
+        """Compute density from pressure."""
         p_temp = p + self.p_ref - self.p_bg
         return self.rho_ref * (p_temp / self.p_ref) ** (1 / self.gamma)
 
@@ -94,9 +94,9 @@ def relax_wrapper(
     rho_ref = 1.0  # reference density
     mass = dx**dim * rho_ref
 
-    box = box if box is not None else np.ones(dim) * L / l_ref 
+    box = box if box is not None else np.ones(dim) * L / l_ref
     pbc = True
-    
+
     kernel_fn = QuinticKernel(h=dx, dim=dim)
 
     u_eos = u_ref / l_ref
@@ -112,7 +112,7 @@ def relax_wrapper(
 
     def loop_body(r, n_part_per_traj, u=None, verbose=False):
         if nu != 0.0:
-            assert (u is not None) and (r.shape==u.shape), "If nu!=0, u needed."
+            assert (u is not None) and (r.shape == u.shape), "If nu!=0, u needed."
 
         r = normalize_length(r)
 
@@ -128,34 +128,36 @@ def relax_wrapper(
         rho = mass * scatter_add(w_dist, i_s, dim=0, dim_size=N_tot)
         p = eos.p_fn(rho)
         if verbose:
-            print(f"Density min/max/std: {rho.min().item():.4f}, {rho.max().item():.4f}, {rho.std().item():.4f}")
-        
+            print(
+                f"Density min/max/std: {rho.min().item():.4f}, {rho.max().item():.4f}, {rho.std().item():.4f}"
+            )
+
         def acceleration_fn(r_ij, d_ij, rho_i, rho_j, p_i, p_j, u_i=None, u_j=None):
             # Compute unit vector, above eq. (6), Zhang (2017). Sign flipped here.
             e_ij = r_ij / (d_ij[:, None] + EPS)
 
             # Compute kernel gradient
             kernel_der = kernel_fn.grad_w(d_ij)
-            kernel_grad = kernel_der[:,None] * e_ij
+            kernel_grad = kernel_der[:, None] * e_ij
 
             # Compute density-weighted pressure (weighted arithmetic mean)
             p_ij = (rho_j * p_i + rho_i * p_j) / (rho_i + rho_j)
 
             # Eq. (8), Adami (2012) with constant `mass`
             prefactor = mass * ((1 / rho_i) ** 2 + (1 / rho_j) ** 2)
-            acc = (-prefactor * p_ij)[:,None] * kernel_grad
+            acc = (-prefactor * p_ij)[:, None] * kernel_grad
 
             if nu != 0.0:
                 u_ij = u_i - u_j
                 # Inter-particle-averaged shear viscosity (harmonic mean) eq. (6), Adami (2013)
                 eta_ij = 1.0
-                temp = eta_ij * u_ij / (d_ij[:,None] + EPS) * kernel_der[:,None]
+                temp = eta_ij * u_ij / (d_ij[:, None] + EPS) * kernel_der[:, None]
                 # Eq. (10), Adami (2012)
-                acc += nu * prefactor[:,None] * temp
+                acc += nu * prefactor[:, None] * temp
 
             if is_tvf:
                 # Add transport velocity acceleration term on top (Eq. 13)
-                acc += 0.5 * (prefactor * kernel_der / (d_ij + EPS) * (-p_eos))[:,None] * r_ij
+                acc += 0.5 * (prefactor * kernel_der / (d_ij + EPS) * (-p_eos))[:, None] * r_ij
 
             return acc
 
@@ -180,9 +182,10 @@ if __name__ == "__main__":
     torch.set_printoptions(precision=8)
 
     import random
+
     random.seed(0)
     np.random.seed(0)
-    noise = np.random.normal(0, dx/10, (Nx**dim, dim)) 
+    noise = np.random.normal(0, dx / 10, (Nx**dim, dim))
     pos_demo = pos_init_cartesian_2d(box_size, dx) + noise
     pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
     # print(pos_demo[:10])
@@ -193,23 +196,23 @@ if __name__ == "__main__":
         Nx=Nx, dim=dim, L=L, is_physical=True, u_ref=u_ref, is_tvf=is_tvf, nu=nu
     )
     n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
-        
+
     for _ in range(10):
         if nu != 0.0:
             torch.manual_seed(0)
-            u = torch.randn_like(pos_demo)/5 * u_ref
+            u = torch.randn_like(pos_demo) / 5 * u_ref
             acc = relax_fn(pos_demo, n_part_per_traj, u=u)
         else:
             acc = relax_fn(pos_demo, n_part_per_traj)
-        pos_demo = shift_fn(pos_demo, dt**2 * (2*acc), box=box_size, pbc=True)
-    
-    
+        pos_demo = shift_fn(pos_demo, dt**2 * (2 * acc), box=box_size, pbc=True)
+
     ## Validate QuinticKernel
-    a = torch.linspace(0,0.4,100)
+    a = torch.linspace(0, 0.4, 100)
     w = QuinticKernel(h=0.1).w(a)
     g = QuinticKernel(h=0.1).grad_w(a)
     import matplotlib.pyplot as plt
+
     fig, axs = plt.subplots(1, 2)
-    axs[0].plot(a,w)
-    axs[1].plot(a,g)
+    axs[0].plot(a, w)
+    axs[1].plot(a, g)
     fig.savefig("quintic_torch.png")

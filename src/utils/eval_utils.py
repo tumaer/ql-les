@@ -1,4 +1,5 @@
 """Utility functions for evaluation."""
+
 import os
 import pickle
 import numpy as np
@@ -16,14 +17,14 @@ def eval_rollout(
     simulator,
     metadata,
     num_rollout_steps,
-    device, 
+    device,
     active_metrics,
-    pbc=True, 
-    u_vel=False, 
+    pbc=True,
+    u_vel=False,
     vis_config=None,
-    trajectory_idx=0, 
+    trajectory_idx=0,
     metric_space="norm",
-    **kwargs
+    **kwargs,
 ):
     """
     Evaluate rollout by computing the mean squared error over trajectories.
@@ -44,7 +45,7 @@ def eval_rollout(
     """
     boundaries = torch.tensor(metadata["bounds"], device=device)
     boundaries = boundaries[:, 1] - boundaries[:, 0]
-    
+
     simulator.eval()
     with torch.no_grad():
         features = {
@@ -52,15 +53,21 @@ def eval_rollout(
             "n_particles_per_trajectory": batch.n_particles_per_trajectory,
             "particle_types": batch.particle_types,
             "target_pos": batch.target_pos,
-            "bounds": boundaries
+            "bounds": boundaries,
         }
         if u_vel:
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
-            
+
         computed_metrics, rollout, ground_truth = eval_single_rollout(
-            simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=u_vel,
-            metric_space=metric_space
+            simulator,
+            features,
+            num_rollout_steps,
+            pbc,
+            metadata,
+            active_metrics,
+            u_vel=u_vel,
+            metric_space=metric_space,
         )
 
         if not u_vel:
@@ -71,17 +78,17 @@ def eval_rollout(
             ground_truth_positions, ground_truth_u_velocity = ground_truth
             kwargs_write = {
                 "u_vel_rollout": u_vel_rollout,
-                "ground_truth_u_velocity": ground_truth_u_velocity
+                "ground_truth_u_velocity": ground_truth_u_velocity,
             }
 
         write_rollout(
             batch=batch,
             trajectory_idx=trajectory_idx,
-            trajectory_rollout=trajectory_rollout, 
-            ground_truth_positions=ground_truth_positions, 
-            vis_config=vis_config, 
+            trajectory_rollout=trajectory_rollout,
+            ground_truth_positions=ground_truth_positions,
+            vis_config=vis_config,
             u_vel=u_vel,
-            **kwargs_write
+            **kwargs_write,
         )
 
     simulator.train()
@@ -89,8 +96,14 @@ def eval_rollout(
 
 
 def eval_single_rollout(
-    simulator, features, num_rollout_steps, pbc, metadata, active_metrics, u_vel=False,
-    metric_space = "norm"
+    simulator,
+    features,
+    num_rollout_steps,
+    pbc,
+    metadata,
+    active_metrics,
+    u_vel=False,
+    metric_space="norm",
 ):
     """
     Evaluate a single trajectory rollout.
@@ -108,10 +121,10 @@ def eval_single_rollout(
         Dictionary containing predicted and ground truth losses.
     """
     ground_truth_positions = features["target_pos"]  # (N, T_out, D)
-    current_positions = features["enc_pos"] #initial positions (N, T_in, D)
+    current_positions = features["enc_pos"]  # initial positions (N, T_in, D)
     dim = current_positions.shape[-1]
     position_predictions = []
-    
+
     if u_vel is False:
         for step in range(num_rollout_steps):
             next_position = simulator.predict_positions(
@@ -125,31 +138,38 @@ def eval_single_rollout(
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
             position_predictions.append(next_position)
-            current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
+            current_positions = torch.cat(
+                [current_positions[:, 1:], next_position[:, None, :]], dim=1
+            )
 
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
-        
+
         trajectory_rollout = position_predictions
-        
+
         computed_metrics = compute_metrics(
-            position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, metric_space=metric_space,
-            most_recent_position=features["enc_pos"][:,-1],
+            position_predictions,
+            ground_truth_positions,
+            metadata,
+            active_metrics,
+            features["bounds"],
+            pbc=pbc,
+            metric_space=metric_space,
+            most_recent_position=features["enc_pos"][:, -1],
         )
-                
+
         return computed_metrics, trajectory_rollout, ground_truth_positions
-    else:   
-        current_u_velocity = features["u_velocity"] #initial u_velocity
+    else:
+        current_u_velocity = features["u_velocity"]  # initial u_velocity
         ground_truth_u_velocity = features["next_u_velocity"]
         u_vel_predictions = []
         for step in range(num_rollout_steps):
             next_position, new_u_velocity = simulator.predict_positions(
-                    current_positions=current_positions,
-                    n_particles_per_trajectory=features["n_particles_per_trajectory"],
-                    particle_types=features["particle_types"],
-                    pbc=pbc,
-                    u_velocity=current_u_velocity,
+                current_positions=current_positions,
+                n_particles_per_trajectory=features["n_particles_per_trajectory"],
+                particle_types=features["particle_types"],
+                pbc=pbc,
+                u_velocity=current_u_velocity,
             )
             kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
             next_position_ground_truth = ground_truth_positions[:, step]
@@ -158,8 +178,12 @@ def eval_single_rollout(
             position_predictions.append(next_position)
             u_vel_predictions.append(new_u_velocity)
 
-            current_positions = torch.cat([current_positions[:, 1:], next_position[:, None, :]], dim=1)
-            current_u_velocity = torch.cat([current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1)
+            current_positions = torch.cat(
+                [current_positions[:, 1:], next_position[:, None, :]], dim=1
+            )
+            current_u_velocity = torch.cat(
+                [current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1
+            )
 
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         u_vel_predictions = torch.stack(u_vel_predictions)  # (time, n_nodes, dim)
@@ -168,7 +192,7 @@ def eval_single_rollout(
 
         trajectory_rollout = position_predictions
         u_vel_rollout = u_vel_predictions
-    
+
         du = u_vel_predictions - ground_truth_u_velocity  # physical space
 
         if metric_space == "norm":
@@ -177,13 +201,19 @@ def eval_single_rollout(
             du *= metadata["dt"] * metadata["write_every"]
 
         computed_position_metrics = compute_metrics(
-            position_predictions, ground_truth_positions, metadata, active_metrics, 
-            features["bounds"], pbc=pbc, u_vel=True, metric_space=metric_space,
-            most_recent_position=features["enc_pos"][:,-1],
+            position_predictions,
+            ground_truth_positions,
+            metadata,
+            active_metrics,
+            features["bounds"],
+            pbc=pbc,
+            u_vel=True,
+            metric_space=metric_space,
+            most_recent_position=features["enc_pos"][:, -1],
         )
         # print(computed_position_metrics["mse"])
         # TODO: eval u metrics on grid!
-        computed_vel_metrics = (du ** 2).mean(dim=(1, 2))
+        computed_vel_metrics = (du**2).mean(dim=(1, 2))
         # print(computed_vel_metrics)
         # import matplotlib.pyplot as plt
         # fig = plt.figure()
@@ -199,69 +229,95 @@ def eval_single_rollout(
         return (
             (computed_position_metrics, computed_vel_metrics),
             (trajectory_rollout, u_vel_rollout),
-            (ground_truth_positions, ground_truth_u_velocity)
+            (ground_truth_positions, ground_truth_u_velocity),
         )
 
 
 def write_rollout(
-    batch, trajectory_idx, trajectory_rollout, ground_truth_positions, vis_config, u_vel=False,
-    **kwargs
+    batch,
+    trajectory_idx,
+    trajectory_rollout,
+    ground_truth_positions,
+    vis_config,
+    u_vel=False,
+    **kwargs,
 ) -> None:
-    
+    """Write the trajectory rollout to files for visualization or analysis."""
     out_type = vis_config.get("out_type", None)
     rollout_dir = vis_config.get("rollout_dir", None)
-    
+
     if rollout_dir is not None:
         os.makedirs(rollout_dir, exist_ok=True)
-        
+
         batch_idx = trajectory_idx
-        
+
         # Prepare the input positions for the rollout
         # (batch_size*nodes, t, dim) -> (t, batch_size*nodes, dim)
         pos_input_batch = batch.enc_pos.permute(1, 0, 2)
 
         batch_offset = 0  # Keeps track of the starting index for each trajectory
         for j in range(batch.batch_size):  # Write every trajectory to file (batch loop)
-            num_particles = batch.n_particles_per_trajectory[j]  # Get the number of particles for this trajectory
+            # Get the number of particles for this trajectory
+            num_particles = batch.n_particles_per_trajectory[j]
 
             # Slice the pos_input_batch for the current trajectory
-            pos_input = pos_input_batch[:, batch_offset:batch_offset + num_particles]  # Shape: (t, nodes, dim)
-            example_rollout = trajectory_rollout[:, batch_offset:batch_offset + num_particles]  # Shape: (extrap, nodes, dim)
-            
+            pos_input = pos_input_batch[:, batch_offset : batch_offset + num_particles]  # (T,N,D)
+            example_rollout = trajectory_rollout[
+                :, batch_offset : batch_offset + num_particles
+            ]  # (extrap, nodes, dim)
+
             # Prepare initial positions and the full sequence
-            initial_positions = pos_input  # Shape: (t_window, nodes, dim)
-            example_full = torch.concatenate([initial_positions, example_rollout], axis=0)  # Shape: (t_window + extrap, nodes, dim)
+            initial_positions = pos_input  # Shape: (t_window, nodes=N, dim=D)
+            example_full = torch.concatenate(
+                [initial_positions, example_rollout], axis=0
+            )  # Shape: (t_window + extrap, nodes, dim)
 
             # Collect the ground truth rollout:
-            ground_truth_rollout = torch.concat([
-                pos_input, ground_truth_positions[:, batch_offset:batch_offset + num_particles]
-            ], axis=0)  # Shape: (t, nodes, dim)
-            
+            ground_truth_rollout = torch.concat(
+                [
+                    pos_input,
+                    ground_truth_positions[:, batch_offset : batch_offset + num_particles],
+                ],
+                axis=0,
+            )  # Shape: (t, nodes, dim)
+
             example_rollout_dict = {
-                    "predicted_rollout": example_full.cpu().numpy(),  # Convert to NumPy
-                    "ground_truth_rollout": ground_truth_rollout.cpu().numpy(),  # Convert to NumPy
-                    "particle_types": batch.particle_types[
-                        batch_offset:batch_offset + num_particles
-                    ].cpu().numpy(),  # Convert to NumPy
-                }
-            
+                "predicted_rollout": example_full.cpu().numpy(),  # Convert to NumPy
+                "ground_truth_rollout": ground_truth_rollout.cpu().numpy(),  # Convert to NumPy
+                "particle_types": batch.particle_types[batch_offset : batch_offset + num_particles]
+                .cpu()
+                .numpy(),  # Convert to NumPy
+            }
+
             if u_vel:
                 u_vel_input = batch.enc_u.permute(1, 0, 2)
                 u_vel_rollout = kwargs["u_vel_rollout"]
                 ground_truth_u_velocity = kwargs["ground_truth_u_velocity"]
-                u_vel_input = u_vel_input[:, batch_offset:batch_offset + num_particles]
-                example_u_vel_rollout = u_vel_rollout[:, batch_offset:batch_offset + num_particles]
+                u_vel_input = u_vel_input[:, batch_offset : batch_offset + num_particles]
+                example_u_vel_rollout = u_vel_rollout[
+                    :, batch_offset : batch_offset + num_particles
+                ]
                 initial_u_vel = u_vel_input
-                example_u_vel_full = torch.concatenate([initial_u_vel, example_u_vel_rollout], axis=0) 
-                ground_truth_u_vel_rollout = torch.concat([
-                    u_vel_input, ground_truth_u_velocity[:, batch_offset:batch_offset + num_particles]
-                ], axis=0)  # Shape: (t, nodes, dim)
+                example_u_vel_full = torch.concatenate(
+                    [initial_u_vel, example_u_vel_rollout], axis=0
+                )
+                ground_truth_u_vel_rollout = torch.concat(
+                    [
+                        u_vel_input,
+                        ground_truth_u_velocity[:, batch_offset : batch_offset + num_particles],
+                    ],
+                    axis=0,
+                )  # Shape: (t, nodes, dim)
                 example_rollout_dict["predicted_u_vel"] = example_u_vel_full.cpu().numpy()
-                example_rollout_dict["ground_truth_u_vel"] = ground_truth_u_vel_rollout.cpu().numpy()
-    
+                example_rollout_dict["ground_truth_u_vel"] = (
+                    ground_truth_u_vel_rollout.cpu().numpy()
+                )
+
             batch_offset += num_particles
             # File handling
-            file_prefix = os.path.join(rollout_dir, f"rollout_{batch_idx * batch.batch_size + j:04d}")
+            file_prefix = os.path.join(
+                rollout_dir, f"rollout_{batch_idx * batch.batch_size + j:04d}"
+            )
             if out_type == "vtk":  # Write vtk files for each time step
                 for k in range(example_full.shape[0]):
                     # Predictions
@@ -323,7 +379,7 @@ def pkl2vtk(src_path, dst_path=None):
 
     Args:
         src_path (str): Source path to .pkl file.
-        dst_path (str, optoinal): Destination directory path. Defaults to None.
+        dst_path (str, optional): Destination directory path. Defaults to None.
             If None, then the vtk files are saved in the same directory as the pkl file.
 
     Example:
@@ -360,7 +416,7 @@ def pkl2vtk(src_path, dst_path=None):
             state_vtk["u"] = rollout["ground_truth_u_vel"][k]
         write_vtk(state_vtk, f"{file_prefix}_ref_{k}.vtk")
 
-  
+
 def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:
     """
     Retrieves the WandB run ID from the logger and updates the config paths with it.
@@ -380,6 +436,10 @@ def update_wandb_id(cfg: DictConfig, logger: List[Logger]) -> None:
     # Update the config paths if a WandB run ID is available
     if wandb_run_id:
         if cfg.model.visualize.vis_test.rollout_dir:
-            cfg.model.visualize.vis_test.rollout_dir = cfg.model.visualize.vis_test.rollout_dir.replace("WANDB_ID", wandb_run_id)
+            cfg.model.visualize.vis_test.rollout_dir = (
+                cfg.model.visualize.vis_test.rollout_dir.replace("WANDB_ID", wandb_run_id)
+            )
         if cfg.model.visualize.vis_val.rollout_dir:
-            cfg.model.visualize.vis_val.rollout_dir = cfg.model.visualize.vis_val.rollout_dir.replace("WANDB_ID", wandb_run_id)
+            cfg.model.visualize.vis_val.rollout_dir = (
+                cfg.model.visualize.vis_val.rollout_dir.replace("WANDB_ID", wandb_run_id)
+            )

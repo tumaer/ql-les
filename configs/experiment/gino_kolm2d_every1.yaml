@@ -10,7 +10,7 @@ defaults:
 model:
   _target_: src.models.gino_module.GINOLitModule
   net:
-    noise_std: 0.0  # TODO: ablate
+    noise_std: 0.0 # TODO: ablate
 
 tags: ["kolm", "gns"]
 

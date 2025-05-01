@@ -2,16 +2,15 @@ import torch
 import torch.nn as nn
 from math import sqrt
 from torch_geometric.data import Data
-from torch_geometric.nn import MessagePassing, global_mean_pool, global_add_pool, global_max_pool
+from torch_geometric.nn import MessagePassing, global_mean_pool, global_max_pool
 from torch_scatter import scatter
 
-from e3nn.o3 import Irreps, Linear, spherical_harmonics, FullyConnectedTensorProduct
+from e3nn.o3 import Irreps, spherical_harmonics, FullyConnectedTensorProduct
 from e3nn.nn import BatchNorm, Gate
-import numpy as np
 
 
 class InstanceNorm(nn.Module):
-    '''Instance normalization for orthonormal representations
+    """Instance normalization for orthonormal representations
     It normalizes by the norm of the representations.
     Note that the norm is invariant only for orthonormal representations.
     Irreducible representations `wigner_D` are orthonormal.
@@ -25,9 +24,9 @@ class InstanceNorm(nn.Module):
         do we have weight and bias parameters
     reduce : {'mean', 'max'}
         method used to reduce
-    '''
+    """
 
-    def __init__(self, irreps, eps=1e-5, affine=True, reduce='mean', normalization='component'):
+    def __init__(self, irreps, eps=1e-5, affine=True, reduce="mean", normalization="component"):
         super().__init__()
 
         self.irreps = Irreps(irreps)
@@ -41,21 +40,23 @@ class InstanceNorm(nn.Module):
             self.weight = nn.Parameter(torch.ones(num_features))
             self.bias = nn.Parameter(torch.zeros(num_scalar))
         else:
-            self.register_parameter('weight', None)
-            self.register_parameter('bias', None)
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
 
         assert isinstance(reduce, str), "reduce should be passed as a string value"
-        assert reduce in ['mean', 'max'], "reduce needs to be 'mean' or 'max'"
+        assert reduce in ["mean", "max"], "reduce needs to be 'mean' or 'max'"
         self.reduce = reduce
 
-        assert normalization in ['norm', 'component'], "normalization needs to be 'norm' or 'component'"
+        assert normalization in ["norm", "component"], (
+            "normalization needs to be 'norm' or 'component'"
+        )
         self.normalization = normalization
 
     def __repr__(self):
         return f"{self.__class__.__name__} ({self.irreps}, eps={self.eps})"
 
     def forward(self, input, batch):
-        '''evaluate
+        """evaluate
         Parameters
         ----------
         input : `torch.Tensor`
@@ -64,7 +65,7 @@ class InstanceNorm(nn.Module):
         -------
         `torch.Tensor`
             tensor of shape ``(batch, ..., irreps.dim)``
-        '''
+        """
         # batch, *size, dim = input.shape  # TODO: deal with batch
         # input = input.reshape(batch, -1, dim)  # [batch, sample, stacked features]
         # input has shape [batch * nodes, dim], but with variable nr of nodes.
@@ -76,9 +77,9 @@ class InstanceNorm(nn.Module):
         iw = 0
         ib = 0
 
-        for mul, ir in self.irreps:  # mul is the multiplicity (number of copies) of some irrep type (ir)
+        for mul, ir in self.irreps:  # mul is the multiplicity (# copies) of some irrep type (ir)
             d = ir.dim
-            field = input[:, ix: ix + mul * d]  # [batch * sample, mul * repr]
+            field = input[:, ix : ix + mul * d]  # [batch * sample, mul * repr]
             ix += mul * d
 
             # [batch * sample, mul, repr]
@@ -93,16 +94,16 @@ class InstanceNorm(nn.Module):
 
             # Then compute the rescaling factor (norm of each feature vector)
             # Rescaling of the norms themselves based on the option "normalization"
-            if self.normalization == 'norm':
+            if self.normalization == "norm":
                 field_norm = field.pow(2).sum(-1)  # [batch * sample, mul]
-            elif self.normalization == 'component':
+            elif self.normalization == "component":
                 field_norm = field.pow(2).mean(-1)  # [batch * sample, mul]
             else:
                 raise ValueError("Invalid normalization option {}".format(self.normalization))
             # Reduction method
-            if self.reduce == 'mean':
+            if self.reduce == "mean":
                 field_norm = global_mean_pool(field_norm, batch)  # [batch, mul]
-            elif self.reduce == 'max':
+            elif self.reduce == "max":
                 field_norm = global_max_pool(field_norm, batch)  # [batch, mul]
             else:
                 raise ValueError("Invalid reduce option {}".format(self.reduce))
@@ -111,14 +112,14 @@ class InstanceNorm(nn.Module):
             field_norm = (field_norm + self.eps).pow(-0.5)  # [batch, mul]
 
             if self.affine:
-                weight = self.weight[None, iw: iw + mul]  # [batch, mul]
+                weight = self.weight[None, iw : iw + mul]  # [batch, mul]
                 iw += mul
                 field_norm = field_norm * weight  # [batch, mul]
 
             field = field * field_norm[batch].reshape(-1, mul, 1)  # [batch * sample, mul, repr]
 
             if self.affine and d == 1:  # scalars
-                bias = self.bias[ib: ib + mul]  # [batch, mul]
+                bias = self.bias[ib : ib + mul]  # [batch, mul]
                 ib += mul
                 field += bias.reshape(mul, 1)  # [batch * sample, mul, repr]
 
@@ -135,7 +136,7 @@ class InstanceNorm(nn.Module):
 
 
 class O3TensorProduct(nn.Module):
-    """ A bilinear layer, computing CG tensorproduct and normalising them.
+    """A bilinear layer, computing CG tensorproduct and normalising them.
 
     Parameters
     ----------
@@ -156,7 +157,7 @@ class O3TensorProduct(nn.Module):
         self.irreps_in1 = irreps_in1
         self.irreps_out = irreps_out
         # Init irreps_in2
-        if irreps_in2 == None:
+        if irreps_in2 is None:
             self.irreps_in2_provided = False
             self.irreps_in2 = Irreps("1x0e")
         else:
@@ -168,12 +169,17 @@ class O3TensorProduct(nn.Module):
         self.tp = FullyConnectedTensorProduct(
             irreps_in1=self.irreps_in1,
             irreps_in2=self.irreps_in2,
-            irreps_out=self.irreps_out, shared_weights=True, normalization='component')
+            irreps_out=self.irreps_out,
+            shared_weights=True,
+            normalization="component",
+        )
 
         # For each zeroth order output irrep we need a bias
         # So first determine the order for each output tensor and their dims
-        self.irreps_out_orders = [int(irrep_str[-2]) for irrep_str in str(irreps_out).split('+')]
-        self.irreps_out_dims = [int(irrep_str.split('x')[0]) for irrep_str in str(irreps_out).split('+')]
+        self.irreps_out_orders = [int(irrep_str[-2]) for irrep_str in str(irreps_out).split("+")]
+        self.irreps_out_dims = [
+            int(irrep_str.split("x")[0]) for irrep_str in str(irreps_out).split("+")
+        ]
         self.irreps_out_slices = irreps_out.slices()
         # Store tuples of slices and corresponding biases in a list
         self.biases = []
@@ -203,8 +209,11 @@ class O3TensorProduct(nn.Module):
                 slice_idx = instr[2]
                 mul_1, mul_2, mul_out = weight.shape
                 fan_in = mul_1 * mul_2
-                slices_fan_in[slice_idx] = (slices_fan_in[slice_idx] +
-                                            fan_in if slice_idx in slices_fan_in.keys() else fan_in)
+                slices_fan_in[slice_idx] = (
+                    slices_fan_in[slice_idx] + fan_in
+                    if slice_idx in slices_fan_in.keys()
+                    else fan_in
+                )
             # Do the initialization of the weights in each instruction
             for weight, instr in zip(self.tp.weight_views(), self.tp.instructions):
                 # The tensor product in e3nn already normalizes proportional to 1 / sqrt(fan_in), and the weights are by
@@ -214,17 +223,19 @@ class O3TensorProduct(nn.Module):
                 if self.tp_rescale:
                     sqrt_k = 1 / sqrt(slices_fan_in[slice_idx])
                 else:
-                    sqrt_k = 1.
+                    sqrt_k = 1.0
                 weight.data.uniform_(-sqrt_k, sqrt_k)
                 self.slices_sqrt_k[slice_idx] = (self.irreps_out_slices[slice_idx], sqrt_k)
 
             # Initialize the biases
-            for (out_slice_idx, out_slice, out_bias) in zip(self.biases_slice_idx, self.biases_slices, self.biases):
+            for out_slice_idx, out_slice, out_bias in zip(
+                self.biases_slice_idx, self.biases_slices, self.biases
+            ):
                 sqrt_k = 1 / sqrt(slices_fan_in[out_slice_idx])
                 out_bias.uniform_(-sqrt_k, sqrt_k)
 
     def vectorise(self):
-        """ Adapts the bias parameter and the sqrt_k corrections so they can be applied using vectorised operations """
+        """Adapts the bias parameter and the sqrt_k corrections so they can be applied using vectorised operations"""
 
         # Vectorise the bias parameters
         if len(self.biases) > 0:
@@ -237,7 +248,9 @@ class O3TensorProduct(nn.Module):
             for slice_idx in range(len(self.irreps_out_orders)):
                 if self.irreps_out_orders[slice_idx] == 0:
                     out_slice = self.irreps_out.slices()[slice_idx]
-                    bias_idx = torch.cat((bias_idx, torch.arange(out_slice.start, out_slice.stop).long()), dim=0)
+                    bias_idx = torch.cat(
+                        (bias_idx, torch.arange(out_slice.start, out_slice.stop).long()), dim=0
+                    )
 
             self.register_buffer("bias_idx", bias_idx, persistent=False)
         else:
@@ -254,7 +267,7 @@ class O3TensorProduct(nn.Module):
         self.register_buffer("sqrt_k_correction", sqrt_k_correction, persistent=False)
 
     def forward_tp_rescale_bias(self, data_in1, data_in2=None) -> torch.Tensor:
-        if data_in2 == None:
+        if data_in2 is None:
             data_in2 = torch.ones_like(data_in1[:, 0:1])
 
         data_out = self.tp(data_in1, data_in2)
@@ -289,7 +302,9 @@ class O3TensorProductSwishGate(O3TensorProduct):
         # Build the layers
         super(O3TensorProductSwishGate, self).__init__(irreps_in1, irreps_g, irreps_in2)
         if irreps_g_gated.num_irreps > 0:
-            self.gate = Gate(irreps_g_scalars, [nn.SiLU()], irreps_g_gate, [torch.sigmoid], irreps_g_gated)
+            self.gate = Gate(
+                irreps_g_scalars, [nn.SiLU()], irreps_g_gate, [torch.sigmoid], irreps_g_gated
+            )
         else:
             self.gate = nn.SiLU()
 
@@ -330,9 +345,7 @@ class SEGNNLayer(MessagePassing):
         self.update_layer_1 = O3TensorProductSwishGate(
             update_input_irreps, hidden_irreps, node_attr_irreps
         )
-        self.update_layer_2 = O3TensorProduct(
-            hidden_irreps, hidden_irreps, node_attr_irreps
-        )
+        self.update_layer_2 = O3TensorProduct(hidden_irreps, hidden_irreps, node_attr_irreps)
 
         self.setup_normalisation(norm)
 
@@ -395,13 +408,14 @@ class SEGNNLayer(MessagePassing):
         x += update  # Residual connection
         return x
 
+
 class SEGNN(nn.Module):
     """Steerable E(3) equivariant message passing network"""
 
     def __init__(
         self,
         dim,
-        num_vs, # TODO: pass this argument
+        num_vs,  # TODO: pass this argument
         alpha_u,  # TODO: pass this argument
         input_irreps,
         hidden_irreps,
@@ -430,9 +444,7 @@ class SEGNN(nn.Module):
         #     hidden_irreps, hidden_irreps, node_attr_irreps
         # )
 
-        self.embedding_layer = O3TensorProduct(
-            input_irreps, hidden_irreps, node_attr_irreps
-        )
+        self.embedding_layer = O3TensorProduct(input_irreps, hidden_irreps, node_attr_irreps)
 
         # Message passing layers.
         layers = []
@@ -451,19 +463,15 @@ class SEGNN(nn.Module):
         self.layers = nn.ModuleList(layers)
 
         # Prepare for output irreps, since the attrs will disappear after pooling
-        self.pre_pool1 = O3TensorProductSwishGate(
-            hidden_irreps, hidden_irreps, node_attr_irreps
-        )
-        self.pre_pool2 = O3TensorProduct(
-            hidden_irreps, output_irreps, node_attr_irreps
-        )
+        self.pre_pool1 = O3TensorProductSwishGate(hidden_irreps, hidden_irreps, node_attr_irreps)
+        self.pre_pool2 = O3TensorProduct(hidden_irreps, output_irreps, node_attr_irreps)
 
     def _o3transform(self, x, edge_index, e_features):
         """Based on LagrangeBench."""
 
         x["v_sequence"] = x["v_flat_velocity_sequence"].reshape(-1, self.num_vs, self.dim)
         if self.alpha_u != 0:
-            x["u_sequence"] = x["u_flat_velocity_sequence"].reshape(-1, self.num_vs+1, self.dim)
+            x["u_sequence"] = x["u_flat_velocity_sequence"].reshape(-1, self.num_vs + 1, self.dim)
 
         n_nodes = x["v_sequence"].shape[0]
         n_edges = edge_index.shape[1]
@@ -475,10 +483,14 @@ class SEGNN(nn.Module):
             )
             if self.alpha_u != 0:
                 x["u_sequence"] = torch.cat(
-                    [x["u_sequence"], torch.zeros((n_nodes, self.num_vs+1, 1)).to(device)], -1
+                    [x["u_sequence"], torch.zeros((n_nodes, self.num_vs + 1, 1)).to(device)], -1
                 )
             e_features["normalized_relative_displacements"] = torch.cat(
-                [e_features["normalized_relative_displacements"], torch.zeros((n_edges, 1)).to(device)], -1
+                [
+                    e_features["normalized_relative_displacements"],
+                    torch.zeros((n_edges, 1)).to(device),
+                ],
+                -1,
             )
 
         # Attributes
@@ -508,9 +520,10 @@ class SEGNN(nn.Module):
             vel_u_embedding = spherical_harmonics(
                 self.node_attr_irreps, vel_u, normalize=True, normalization="integral"
             )
-            vel_embedding = vel_embedding + vel_u_embedding  # TODO: explore alternatives   
-        node_attributes = scatter(
-            edge_attributes, edge_index[1], dim=0, reduce="mean") + vel_embedding
+            vel_embedding = vel_embedding + vel_u_embedding  # TODO: explore alternatives
+        node_attributes = (
+            scatter(edge_attributes, edge_index[1], dim=0, reduce="mean") + vel_embedding
+        )
 
         # Features
         # node features
@@ -518,16 +531,14 @@ class SEGNN(nn.Module):
         if self.alpha_u != 0:
             node_features += [x["u_sequence"].reshape(n_nodes, (self.num_vs + 1) * 3)]
         node_features += [
-            x[k] 
-            for k in [
-                "normalized_clipped_distance_to_boundaries", "particle_type_embeddings"
-            ] 
+            x[k]
+            for k in ["normalized_clipped_distance_to_boundaries", "particle_type_embeddings"]
             if k in x
         ]
         # edge features
         edge_features = [
-            e_features[k] 
-            for k in ["normalized_relative_displacements", "normalized_relative_distances"] 
+            e_features[k]
+            for k in ["normalized_relative_displacements", "normalized_relative_distances"]
             if k in e_features
         ]
 
@@ -537,7 +548,7 @@ class SEGNN(nn.Module):
             edge_attr=edge_attributes,
             node_attr=node_attributes,
             additional_message_features=torch.cat(edge_features, axis=-1),
-            batch=x["batch_ids"]
+            batch=x["batch_ids"],
         )
 
     def _postprocess(self, x):
@@ -550,7 +561,7 @@ class SEGNN(nn.Module):
         if self.dim == 2:
             x = x[:, :2]
         return x
-    
+
     def forward(self, x, edge_index, e_features):
         """SEGNN forward pass"""
         # physical graph to spherical harmonics features
@@ -575,9 +586,7 @@ class SEGNN(nn.Module):
 
         # Pass messages
         for layer in self.layers:
-            x = layer(
-                x, edge_index, edge_attr, node_attr, batch, additional_message_features
-            )
+            x = layer(x, edge_index, edge_attr, node_attr, batch, additional_message_features)
 
         # Pre pool
         x = self.pre_pool1(x, node_attr)
@@ -588,7 +597,7 @@ class SEGNN(nn.Module):
 
 
 def BalancedIrreps(lmax, vec_dim, sh_type=True):
-    """ Allocates irreps equally along channel budget, resulting
+    """Allocates irreps equally along channel budget, resulting
         in unequal numbers of irreps in ratios of 2l_i + 1 to 2l_j + 1.
 
     Parameters
@@ -607,11 +616,11 @@ def BalancedIrreps(lmax, vec_dim, sh_type=True):
 
     """
     irrep_spec = "0e"
-    for l in range(1, lmax + 1):
+    for l_i in range(1, lmax + 1):
         if sh_type:
-            irrep_spec += " + {0}".format(l) + ('e' if (l % 2) == 0 else 'o')
+            irrep_spec += " + {0}".format(l_i) + ("e" if (l_i % 2) == 0 else "o")
         else:
-            irrep_spec += " + {0}e + {0}o".format(l)
+            irrep_spec += " + {0}e + {0}o".format(l_i)
     irrep_spec_split = irrep_spec.split(" + ")
     dims = [int(irrep[0]) * 2 + 1 for irrep in irrep_spec_split]
     # Compute ratios
@@ -624,10 +633,10 @@ def BalancedIrreps(lmax, vec_dim, sh_type=True):
     irrep_copies[0] += vec_dim - sum(irrep_dims)
 
     # Convert to string
-    str_out = ''
-    for (spec, dim) in zip(irrep_spec_split, irrep_copies):
-        str_out += str(dim) + 'x' + spec
-        str_out += ' + '
+    str_out = ""
+    for spec, dim in zip(irrep_spec_split, irrep_copies):
+        str_out += str(dim) + "x" + spec
+        str_out += " + "
     str_out = str_out[:-3]
     # Generate the irrep
     return Irreps(str_out)
@@ -658,14 +667,26 @@ def WeightBalancedIrreps(irreps_in1_scalar, irreps_in2, sh=True, lmax=None):
     """
 
     n = 1
-    if lmax == None:
+    if lmax is None:
         lmax = irreps_in2.lmax
-    irreps_in1 = (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify() if sh else BalancedIrreps(lmax, n)
+    irreps_in1 = (
+        (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify()
+        if sh
+        else BalancedIrreps(lmax, n)
+    )
     weight_numel1 = FullyConnectedTensorProduct(irreps_in1, irreps_in2, irreps_in1).weight_numel
-    weight_numel_scalar = FullyConnectedTensorProduct(irreps_in1_scalar, Irreps("1x0e"), irreps_in1_scalar).weight_numel
+    weight_numel_scalar = FullyConnectedTensorProduct(
+        irreps_in1_scalar, Irreps("1x0e"), irreps_in1_scalar
+    ).weight_numel
     while weight_numel1 < weight_numel_scalar:  # TODO: somewhat suboptimal implementation...
         n += 1
-        irreps_in1 = (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify() if sh else BalancedIrreps(lmax, n)
-        weight_numel1 = FullyConnectedTensorProduct(irreps_in1, irreps_in2, irreps_in1).weight_numel
-    print('Determined irrep type:', irreps_in1)
+        irreps_in1 = (
+            (Irreps.spherical_harmonics(lmax) * n).sort().irreps.simplify()
+            if sh
+            else BalancedIrreps(lmax, n)
+        )
+        weight_numel1 = FullyConnectedTensorProduct(
+            irreps_in1, irreps_in2, irreps_in1
+        ).weight_numel
+    print("Determined irrep type:", irreps_in1)
     return Irreps(irreps_in1)

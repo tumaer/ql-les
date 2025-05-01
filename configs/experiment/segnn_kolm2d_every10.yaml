@@ -10,9 +10,9 @@ defaults:
 model:
   _target_: src.models.gnn_module.GNNLitModule
   net:
-    noise_std: 3.0e-4  # TODO:  Ablate this.
+    noise_std: 3.0e-4 # TODO:  Ablate this.
   pushforward: null
-  vel_solver: "simple"  # "simple", "tvf", "neural_sph"
+  vel_solver: "simple" # "simple", "tvf", "neural_sph"
   alpha_u: 1.0
   alpha_v: 1.0
 

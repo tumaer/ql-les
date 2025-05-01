@@ -1,17 +1,17 @@
 # configs/model/gns.yaml
 
 # Specify the correct path to the SimulatorLitModule in the Lightning module
-_target_: src.models.gnn_module.GNNLitModule  # Adjust this to the actual path for your GNS Lightning module
+_target_: src.models.gnn_module.GNNLitModule # Adjust this to the actual path for your GNS Lightning module
 
 net:
   # Specify the correct path to the GNS model implementation (GNNSimulator) within the SimulatorLitModule
-  _target_: src.models.gnn_module.GNNSimulator  # Adjust this to the actual path for your GNS simulator model
+  _target_: src.models.gnn_module.GNNSimulator # Adjust this to the actual path for your GNS simulator model
   _partial_: true
   model_name: "gns"
   input_seq_length: ${vars.input_seq_length}
   latent_dim: 128
   num_message_passing_steps: 10
-  noise_std: 3.0e-4 
+  noise_std: 3.0e-4
   num_particle_types: 9
   particle_type_embedding_size: 16
   dataset_path: ${data.data_dir} # Path to the dataset
@@ -72,7 +72,7 @@ neuralsph:
 num_rollout_steps: ${vars.num_rollout_steps}
 active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
-  val: "norm"  # {"phys", "norm", "diff"} = physical, normalized, difference
+  val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
 alpha_u: 0.0
 alpha_v: 1.0

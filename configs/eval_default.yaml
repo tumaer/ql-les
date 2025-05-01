@@ -12,8 +12,6 @@ defaults:
   - vars: default
   - experiment: null
   - hydra: default
-  
-  
 
 task_name: "eval"
 

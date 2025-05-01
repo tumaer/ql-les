@@ -6,6 +6,7 @@ from src.utils.train_utils import wrap_displacement
 
 EPSILON = 1e-8
 
+
 def build_mlp(
     input_size,
     layer_sizes,
@@ -13,6 +14,7 @@ def build_mlp(
     output_activation=torch.nn.Identity,
     activation=torch.nn.ReLU,
 ):
+    """Builds an MLP with the specified layer sizes and activations."""
     sizes = [input_size] + layer_sizes
     if output_size:
         sizes.append(output_size)
@@ -23,7 +25,9 @@ def build_mlp(
         layers += [torch.nn.Linear(sizes[i], sizes[i + 1]), act()]
     return torch.nn.Sequential(*layers)
 
+
 def time_diff(input_sequence, boundaries, pbc=True):
+    """Returns the time difference between two consecutive frames in a sequence."""
     if pbc:
         raw_diff = input_sequence[:, 1:] - input_sequence[:, :-1]
         wrapped_diff = wrap_displacement(raw_diff, boundaries)
@@ -39,55 +43,87 @@ def get_random_walk_noise_for_position_sequence(
     velocity_sequence_shape = list(position_sequence.shape)
     velocity_sequence_shape[1] -= 1
     n_velocities = velocity_sequence_shape[1]
-    
+
     velocity_sequence_noise = torch.randn(velocity_sequence_shape) * (
-        noise_std_last_step/n_velocities**0.5
+        noise_std_last_step / n_velocities**0.5
     )
     velocity_sequence_noise = torch.cumsum(velocity_sequence_noise, dim=1)
-    
-    position_sequence_noise = torch.cat([
-        torch.zeros_like(velocity_sequence_noise[:, 0:1]),
-        torch.cumsum(velocity_sequence_noise, dim=1)], dim=1)
+
+    position_sequence_noise = torch.cat(
+        [
+            torch.zeros_like(velocity_sequence_noise[:, 0:1]),
+            torch.cumsum(velocity_sequence_noise, dim=1),
+        ],
+        dim=1,
+    )
 
     return position_sequence_noise
 
+
 class Encoder(nn.Module):
+    """Encoder module for the graph neural network."""
+
     def __init__(
-        self, 
-        node_in, 
-        node_out, 
-        edge_in, 
+        self,
+        node_in,
+        node_out,
+        edge_in,
         edge_out,
         mlp_num_layers,
         mlp_hidden_dim,
     ):
         super(Encoder, self).__init__()
-        self.node_fn = nn.Sequential(*[build_mlp(node_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out), 
-            nn.LayerNorm(node_out)])
-        self.edge_fn = nn.Sequential(*[build_mlp(edge_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], edge_out), 
-            nn.LayerNorm(edge_out)])
+        self.node_fn = nn.Sequential(
+            *[
+                build_mlp(node_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out),
+                nn.LayerNorm(node_out),
+            ]
+        )
+        self.edge_fn = nn.Sequential(
+            *[
+                build_mlp(edge_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], edge_out),
+                nn.LayerNorm(edge_out),
+            ]
+        )
 
-    def forward(self, x, edge_index, e_features): # global_features
+    def forward(self, x, edge_index, e_features):  # global_features
         # x: (E, node_in)
         # edge_index: (2, E)
-        # e_features: (E, edge_in)         
+        # e_features: (E, edge_in)
         return self.node_fn(x), self.edge_fn(e_features)
 
+
 class InteractionNetwork(MessagePassing):
+    """Interaction network module for the graph neural network."""
+
     def __init__(
-        self, 
-        node_in, 
-        node_out, 
-        edge_in, 
+        self,
+        node_in,
+        node_out,
+        edge_in,
         edge_out,
         mlp_num_layers,
         mlp_hidden_dim,
     ):
-        super(InteractionNetwork, self).__init__(aggr='add')
-        self.node_fn = nn.Sequential(*[build_mlp(node_in+edge_out, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out), 
-            nn.LayerNorm(node_out)])
-        self.edge_fn = nn.Sequential(*[build_mlp(node_in+node_in+edge_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], edge_out), 
-            nn.LayerNorm(edge_out)])
+        super(InteractionNetwork, self).__init__(aggr="add")
+        self.node_fn = nn.Sequential(
+            *[
+                build_mlp(
+                    node_in + edge_out, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out
+                ),
+                nn.LayerNorm(node_out),
+            ]
+        )
+        self.edge_fn = nn.Sequential(
+            *[
+                build_mlp(
+                    node_in + node_in + edge_in,
+                    [mlp_hidden_dim for _ in range(mlp_num_layers)],
+                    edge_out,
+                ),
+                nn.LayerNorm(edge_out),
+            ]
+        )
 
     def forward(self, x, edge_index, e_features):
         # x: (E, node_in)
@@ -96,7 +132,7 @@ class InteractionNetwork(MessagePassing):
         x_residual = x
         e_features_residual = e_features
         x, e_features = self.propagate(edge_index=edge_index, x=x, e_features=e_features)
-        return x+x_residual, e_features+e_features_residual
+        return x + x_residual, e_features + e_features_residual
 
     def message(self, edge_index, x_i, x_j, e_features):
         e_features = torch.cat([x_i, x_j, e_features], dim=-1)
@@ -110,51 +146,66 @@ class InteractionNetwork(MessagePassing):
         x_updated = self.node_fn(x_updated)
         return x_updated, e_features
 
+
 class Processor(MessagePassing):
+    """Processor module for the graph neural network."""
+
     def __init__(
-        self, 
-        node_in, 
-        node_out, 
-        edge_in, 
+        self,
+        node_in,
+        node_out,
+        edge_in,
         edge_out,
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
     ):
-        super(Processor, self).__init__(aggr='max')
-        self.gnn_stacks = nn.ModuleList([
-            InteractionNetwork(
-                node_in=node_in, 
-                node_out=node_out,
-                edge_in=edge_in, 
-                edge_out=edge_out,
-                mlp_num_layers=mlp_num_layers,
-                mlp_hidden_dim=mlp_hidden_dim,
-            ) for _ in range(num_message_passing_steps)])
+        super(Processor, self).__init__(aggr="max")
+        self.gnn_stacks = nn.ModuleList(
+            [
+                InteractionNetwork(
+                    node_in=node_in,
+                    node_out=node_out,
+                    edge_in=edge_in,
+                    edge_out=edge_out,
+                    mlp_num_layers=mlp_num_layers,
+                    mlp_hidden_dim=mlp_hidden_dim,
+                )
+                for _ in range(num_message_passing_steps)
+            ]
+        )
 
     def forward(self, x, edge_index, e_features):
         for gnn in self.gnn_stacks:
             x, e_features = gnn(x, edge_index, e_features)
         return x, e_features
 
+
 class Decoder(nn.Module):
+    """Decoder module for the graph neural network."""
+
     def __init__(
-        self, 
-        node_in, 
+        self,
+        node_in,
         node_out,
         mlp_num_layers,
         mlp_hidden_dim,
     ):
         super(Decoder, self).__init__()
-        self.node_fn = build_mlp(node_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out)
+        self.node_fn = build_mlp(
+            node_in, [mlp_hidden_dim for _ in range(mlp_num_layers)], node_out
+        )
 
     def forward(self, x):
         # x: (E, node_in)
         return self.node_fn(x)
 
+
 class EncodeProcessDecode(nn.Module):
+    """Graph Network Simulator (GNS) by Sanchez-Gonzalez et al. (2020)."""
+
     def __init__(
-        self, 
+        self,
         node_in,
         node_out,
         edge_in,
@@ -162,22 +213,21 @@ class EncodeProcessDecode(nn.Module):
         num_message_passing_steps,
         mlp_num_layers,
         mlp_hidden_dim,
-        alpha_u
-        
+        alpha_u,
     ):
         super(EncodeProcessDecode, self).__init__()
         self._encoder = Encoder(
-            node_in=node_in, 
+            node_in=node_in,
             node_out=latent_dim,
-            edge_in=edge_in, 
+            edge_in=edge_in,
             edge_out=latent_dim,
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
         )
         self._processor = Processor(
-            node_in=latent_dim, 
+            node_in=latent_dim,
             node_out=latent_dim,
-            edge_in=latent_dim, 
+            edge_in=latent_dim,
             edge_out=latent_dim,
             num_message_passing_steps=num_message_passing_steps,
             mlp_num_layers=mlp_num_layers,
@@ -196,7 +246,7 @@ class EncodeProcessDecode(nn.Module):
             x[k]
             for k in [  # define a fixed order for the node features
                 "v_flat_velocity_sequence",
-                "u_flat_velocity_sequence", 
+                "u_flat_velocity_sequence",
                 "normalized_clipped_distance_to_boundaries",
                 "particle_type_embeddings",
             ]
@@ -207,7 +257,7 @@ class EncodeProcessDecode(nn.Module):
             e_features[k]
             for k in [  # define a fixed order for the node features
                 "normalized_relative_displacements",
-                "normalized_relative_distances", 
+                "normalized_relative_distances",
             ]
             if k in e_features
         ]

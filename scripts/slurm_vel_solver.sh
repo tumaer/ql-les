@@ -30,8 +30,8 @@ EXTRAS="$6"  # for additional arguments
 
 echo "Training ${MODEL_NAME} with vel_solver=${VEL_SOLVER}, alpha_u=${ALPHA_U}, every_n=${EVERY_N}," \
   "seed=${SEED}, and extras='${EXTRAS}'"
-python src/train.py experiment=${MODEL_NAME}_kolm2d_every${EVERY_N}.yaml model.alpha_u=${ALPHA_U} \
-  +logger.wandb.name=${MODEL_NAME}_${VEL_SOLVER} model.vel_solver=${VEL_SOLVER} seed=${SEED} ${EXTRAS}
+python src/train.py experiment="${MODEL_NAME}"_kolm2d_every"${EVERY_N}".yaml model.alpha_u="${ALPHA_U}" \
+  +logger.wandb.name="${MODEL_NAME}"_"${VEL_SOLVER}" model.vel_solver="${VEL_SOLVER}" seed="${SEED}" "${EXTRAS}"
 
 ### Runs
 

@@ -2,6 +2,6 @@
 
 lr_monitor:
   _target_: lightning.pytorch.callbacks.LearningRateMonitor
-  logging_interval: null  # "epoch" or "step". null defaults to scheduler interval
+  logging_interval: null # "epoch" or "step". null defaults to scheduler interval
   log_momentum: False
   log_weight_decay: False

@@ -1,14 +1,14 @@
-#src.models.gns_module.py
+# src.models.gns_module.py
 from typing import Any, Dict, Tuple
-from functools import partial
-import time
-import pickle
-import os
 
 import torch
 from torch import Tensor
 import torch.nn as nn
-from src.models.components.gns import get_random_walk_noise_for_position_sequence, EncodeProcessDecode, time_diff
+from src.models.components.gns import (
+    get_random_walk_noise_for_position_sequence,
+    EncodeProcessDecode,
+    time_diff,
+)
 from src.models.components.segnn import SEGNN, WeightBalancedIrreps, Irreps
 from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
@@ -18,6 +18,8 @@ from src.utils.nbrs_utils import nearest
 
 
 class GNNSimulator(BaseSimulator):
+    """Graph Network Simulator (GNS) for learning both u and v simultaneously."""
+
     def __init__(
         self,
         model_name,
@@ -32,7 +34,7 @@ class GNNSimulator(BaseSimulator):
         alpha_u,
         vel_solver=None,
         isotropic_norm=False,
-        **kwargs  # model specific params
+        **kwargs,  # model specific params
     ):
         super().__init__(
             model_name=model_name,
@@ -42,7 +44,9 @@ class GNNSimulator(BaseSimulator):
             dataset_path=dataset_path,
         )
         self._num_particle_types = num_particle_types
-        self._particle_type_embedding = nn.Embedding(num_particle_types, particle_type_embedding_size) # (9, 16)
+        self._particle_type_embedding = nn.Embedding(
+            num_particle_types, particle_type_embedding_size
+        )  # (9, 16)
         self.alpha_u = alpha_u
         self.vel_solver = vel_solver
         if alpha_u != 0:
@@ -50,7 +54,7 @@ class GNNSimulator(BaseSimulator):
 
         num_vs = input_seq_length - 1
         num_us = input_seq_length if alpha_u != 0 else 0
-        
+
         if model_name == "gns":
             self._encode_process_decode = EncodeProcessDecode(
                 node_in=self.dim * (num_vs + num_us) + particle_type_embedding_size,
@@ -60,63 +64,72 @@ class GNNSimulator(BaseSimulator):
                 num_message_passing_steps=num_message_passing_steps,
                 mlp_num_layers=kwargs["mlp_num_layers"],
                 mlp_hidden_dim=kwargs["mlp_hidden_dim"],
-                alpha_u=alpha_u
+                alpha_u=alpha_u,
             )
         elif model_name == "segnn":
-            input_irreps = Irreps(f"{num_vs + num_us}x1o + {particle_type_embedding_size}x0e")  # node features
+            input_irreps = Irreps(
+                f"{num_vs + num_us}x1o + {particle_type_embedding_size}x0e"
+            )  # node features
             output_irreps = Irreps("1x1o" if alpha_u == 0 else "2x1o")  # output (node) features
             edge_attr_irreps = Irreps.spherical_harmonics(kwargs["lmax_attr"])  # edge attributes
             node_attr_irreps = Irreps.spherical_harmonics(kwargs["lmax_attr"])  # node attributes
             additional_message_irreps = Irreps("1x1o + 1x0e")  # edge features
 
             hidden_irreps = WeightBalancedIrreps(
-                Irreps("{}x0e".format(latent_dim)), 
-                node_attr_irreps, sh=True, lmax=kwargs["lmax_hidden"]
+                Irreps("{}x0e".format(latent_dim)),
+                node_attr_irreps,
+                sh=True,
+                lmax=kwargs["lmax_hidden"],
             )
-            
+
             self._encode_process_decode = SEGNN(
                 self.dim,
                 num_vs,
                 alpha_u,
-                input_irreps,       # 5x1o / 11x1o
-                hidden_irreps,      # 32x0e+32x1o
-                output_irreps,      # 1x1o / 2x1o
-                edge_attr_irreps,   # 1x0e+1x1o
-                node_attr_irreps,   # 1x0e+1x1o
+                input_irreps,  # 5x1o / 11x1o
+                hidden_irreps,  # 32x0e+32x1o
+                output_irreps,  # 1x1o / 2x1o
+                edge_attr_irreps,  # 1x0e+1x1o
+                node_attr_irreps,  # 1x0e+1x1o
                 num_layers=num_message_passing_steps,  # 10
-                velocity_aggregate=kwargs["velocity_aggregate"], # "avg", "last"
+                velocity_aggregate=kwargs["velocity_aggregate"],  # "avg", "last"
                 norm=kwargs["norm"],  # None, "batch", "instance"
-                additional_message_irreps=additional_message_irreps  # 2x0e
+                additional_message_irreps=additional_message_irreps,  # 2x0e
             )
         else:
             raise Warning(f"Model name {model_name} not recognized.")
-
 
     def _build_graph_from_raw(
         self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
     ):
         device = position_sequence.device
         n_total_points = position_sequence.shape[0]
-        most_recent_position = position_sequence[:, -1] # (n_nodes, 2)
+        most_recent_position = position_sequence[:, -1]  # (n_nodes, 2)
         v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
-        
+
         # senders and receivers are integers of shape (E,)
 
         senders, receivers = nearest(
-            most_recent_position, n_particles_per_trajectory, pbc, self._boundaries, cutoff=self._connectivity_radius
+            most_recent_position,
+            n_particles_per_trajectory,
+            pbc,
+            self._boundaries,
+            cutoff=self._connectivity_radius,
         )
 
-        batch_ids = torch.cat([
-            torch.LongTensor([i for _ in range(n)])
-            for i, n in enumerate(n_particles_per_trajectory)
-        ]).to(device)
+        batch_ids = torch.cat(
+            [
+                torch.LongTensor([i for _ in range(n)])
+                for i, n in enumerate(n_particles_per_trajectory)
+            ]
+        ).to(device)
         node_features = {"batch_ids": batch_ids}
-        
+
         # Normalized velocity sequence, merging spatial an time axis.
         v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
         v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
         node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
-        
+
         if self.alpha_u != 0:
             u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
             u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
@@ -129,12 +142,17 @@ class GNNSimulator(BaseSimulator):
             # boundaries are an array of shape [num_dimensions, 2], where the second
             # axis, provides the lower/upper bofundaries.
             boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(device)
-            distance_to_lower_boundary = (most_recent_position - boundaries[:, 0][None])
-            distance_to_upper_boundary = (boundaries[:, 1][None] - most_recent_position)
-            distance_to_boundaries = torch.cat([distance_to_lower_boundary, distance_to_upper_boundary], dim=1)
-            normalized_clipped_distance_to_boundaries = torch.clamp(distance_to_boundaries / self._connectivity_radius, -1., 1.)
-            node_features["normalized_clipped_distance_to_boundaries"] = normalized_clipped_distance_to_boundaries
-
+            distance_to_lower_boundary = most_recent_position - boundaries[:, 0][None]
+            distance_to_upper_boundary = boundaries[:, 1][None] - most_recent_position
+            distance_to_boundaries = torch.cat(
+                [distance_to_lower_boundary, distance_to_upper_boundary], dim=1
+            )
+            normalized_clipped_distance_to_boundaries = torch.clamp(
+                distance_to_boundaries / self._connectivity_radius, -1.0, 1.0
+            )
+            node_features["normalized_clipped_distance_to_boundaries"] = (
+                normalized_clipped_distance_to_boundaries
+            )
 
         if self._num_particle_types > 1:
             particle_type_embeddings = self._particle_type_embedding(particle_types)
@@ -148,14 +166,18 @@ class GNNSimulator(BaseSimulator):
         # normalized_relative_displacements = (
         #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
         # ) / self._connectivity_radius
-        normalized_relative_displacements = self.displ_fn(most_recent_position[senders, :], most_recent_position[receivers, :])
-        
+        normalized_relative_displacements = self.displ_fn(
+            most_recent_position[senders, :], most_recent_position[receivers, :]
+        )
+
         normalized_relative_displacements /= self._connectivity_radius
         edge_features["normalized_relative_displacements"] = normalized_relative_displacements
 
-        normalized_relative_distances = torch.norm(normalized_relative_displacements, dim=-1, keepdim=True)
+        normalized_relative_distances = torch.norm(
+            normalized_relative_displacements, dim=-1, keepdim=True
+        )
         edge_features["normalized_relative_distances"] = normalized_relative_distances
-            
+
         return node_features, torch.stack([senders, receivers]), edge_features
 
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
@@ -174,7 +196,7 @@ class GNNSimulator(BaseSimulator):
 
         # The model produces the output in normalized space so we apply inverse normalization.
         v_acceleration = self._denorm(a_v_pred, "va")
-        
+
         most_recent_position = position_sequence[:, -1]
         most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
 
@@ -189,39 +211,43 @@ class GNNSimulator(BaseSimulator):
             if self.vel_solver == "simple":
                 new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
                 new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
-                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             elif self.vel_solver == "tvf":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
-                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
-                
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+
             elif self.vel_solver == "neural_sph":
                 new_v_velocity = most_recent_v_velocity + v_acceleration
                 new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
-                new_position = self.shift_fn(most_recent_position, new_v_velocity)   
-                
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+
             elif self.vel_solver == "simple_u":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             elif self.vel_solver == "simple_u_closure":
-                au_sph = self._sph(most_recent_position, kwargs["n_part_per_traj"], most_recent_u_velocity)
+                au_sph = self._sph(
+                    most_recent_position, kwargs["n_part_per_traj"], most_recent_u_velocity
+                )
                 # TODO: au_sph * dt 20x larger than the predicted one
-                new_u_velocity = most_recent_u_velocity + u_acceleration + au_sph * self._effective_dt
+                new_u_velocity = (
+                    most_recent_u_velocity + u_acceleration + au_sph * self._effective_dt
+                )
                 new_v_velocity = most_recent_v_velocity + v_acceleration
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
-                
+
             elif self.vel_solver == "simple_rlx":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
                 new_pos_temp = self.shift_fn(most_recent_position, self._u2v(new_u_velocity))
                 av_rlx, v_rlx, new_position = self._sph_rlx(
-                    new_pos_temp, 
-                    kwargs["n_part_per_traj"], 
+                    new_pos_temp,
+                    kwargs["n_part_per_traj"],
                     is_tvf=self.metadata["rlx_is_tvf"],
                     dt_factor=self.metadata["rlx_dt_factor"],
-                    num_steps=self.metadata["rlx_num_steps"]
+                    num_steps=self.metadata["rlx_num_steps"],
                 )
                 if self.metadata["write_every"] > 1:
                     new_position = self.shift_fn(new_position, v_acceleration)
@@ -231,80 +257,119 @@ class GNNSimulator(BaseSimulator):
 
             if self.neuralsph["num_steps"] > 0:
                 _, _, new_position = self._sph_rlx(
-                    new_position, 
-                    kwargs["n_part_per_traj"], 
-                    is_tvf=self.neuralsph["is_tvf"], 
-                    dt_factor=self.neuralsph["dt_factor"], 
-                    num_steps=self.neuralsph["num_steps"]
+                    new_position,
+                    kwargs["n_part_per_traj"],
+                    is_tvf=self.neuralsph["is_tvf"],
+                    dt_factor=self.neuralsph["dt_factor"],
+                    num_steps=self.neuralsph["num_steps"],
                 )
 
             return new_position, new_u_velocity
-        
+
         else:
             new_v_velocity = most_recent_v_velocity + v_acceleration
             new_position = self.shift_fn(most_recent_position, new_v_velocity)
-            
+
             if self.neuralsph["num_steps"] > 0:
                 _, _, new_position = self._sph_rlx(
-                    new_position, 
-                    kwargs["n_part_per_traj"], 
-                    is_tvf=self.neuralsph["is_tvf"], 
-                    dt_factor=self.neuralsph["dt_factor"], 
-                    num_steps=self.neuralsph["num_steps"]
+                    new_position,
+                    kwargs["n_part_per_traj"],
+                    is_tvf=self.neuralsph["is_tvf"],
+                    dt_factor=self.neuralsph["dt_factor"],
+                    num_steps=self.neuralsph["num_steps"],
                 )
         return new_position
 
-    def predict_positions(self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
+    def predict_positions(
+        self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
+    ):
+        """Predict the next position using GNS. Used for rollout."""
         if pbc:
             current_positions = current_positions % self._boundaries
-            
+
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                current_positions, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+                current_positions,
+                n_particles_per_trajectory,
+                particle_types,
+                pbc,
+                u_velocity=u_velocity,
+            )
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             next_position, new_u_velocity = self._decoder_postprocessor(
-                a_v_pred, current_positions, pbc, 
-                a_u_pred=a_u_pred, u_velocity=u_velocity, n_part_per_traj=n_particles_per_trajectory
+                a_v_pred,
+                current_positions,
+                pbc,
+                a_u_pred=a_u_pred,
+                u_velocity=u_velocity,
+                n_part_per_traj=n_particles_per_trajectory,
             )
             return next_position, new_u_velocity
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                current_positions, n_particles_per_trajectory, particle_types, pbc)
-            predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
-            next_position = self._decoder_postprocessor(predicted_normalized_acceleration, current_positions, pbc)
+                current_positions, n_particles_per_trajectory, particle_types, pbc
+            )
+            predicted_normalized_acceleration = self._encode_process_decode(
+                node_features, edge_index, e_features
+            )
+            next_position = self._decoder_postprocessor(
+                predicted_normalized_acceleration, current_positions, pbc
+            )
             return next_position
 
-    def predict_accelerations(self, next_position, position_sequence_noise, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs):
-        #next_position needs to drop dim=1 because the dataloader is configured for both training and validation, but for training this dim is not necessary.
+    def predict_accelerations(
+        self,
+        next_position,
+        position_sequence_noise,
+        position_sequence,
+        n_particles_per_trajectory,
+        particle_types,
+        pbc=True,
+        **kwargs,
+    ):
+        """Predict acceleration using GNS and also return the target acceleration."""
+        # next_position needs to drop dim=1 because the dataloader is configured for both training and validation, but for training this dim is not necessary.
         next_position = next_position.squeeze(1)
         noisy_position_sequence = self.shift_fn(position_sequence, position_sequence_noise)
         next_position_adjusted = self.shift_fn(next_position, position_sequence_noise[:, -1])
 
-        #Compute the target normalized acceleration
+        # Compute the target normalized acceleration
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc, u_velocity=u_velocity)
+                noisy_position_sequence,
+                n_particles_per_trajectory,
+                particle_types,
+                pbc,
+                u_velocity=u_velocity,
+            )
             a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
             a_v_target, a_u_target = self._inverse_decoder_postprocessor(
-                next_position_adjusted, noisy_position_sequence, pbc, 
-                next_u_velocity=next_u_velocity, u_velocity=u_velocity,
-                n_part_per_traj=n_particles_per_trajectory
+                next_position_adjusted,
+                noisy_position_sequence,
+                pbc,
+                next_u_velocity=next_u_velocity,
+                u_velocity=u_velocity,
+                n_part_per_traj=n_particles_per_trajectory,
             )
-            
-            return (a_v_pred, a_u_pred), (a_v_target, a_u_target)   
+
+            return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc)
-            predicted_normalized_acceleration = self._encode_process_decode(node_features, edge_index, e_features)
+                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc
+            )
+            predicted_normalized_acceleration = self._encode_process_decode(
+                node_features, edge_index, e_features
+            )
             target_nomralized_acceleration = self._inverse_decoder_postprocessor(
-                next_position_adjusted, noisy_position_sequence, pbc)
-            
+                next_position_adjusted, noisy_position_sequence, pbc
+            )
+
             return predicted_normalized_acceleration, target_nomralized_acceleration
-         
-    #PBC COMPATIBLE IMPLEMENTATION
+
+    # PBC COMPATIBLE IMPLEMENTATION
     def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):
         """Inverse of `_decoder_postprocessor`, with PBC support."""
         # Handle PBC for position differences
@@ -324,7 +389,7 @@ class GNNSimulator(BaseSimulator):
             elif self.vel_solver == "tvf":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = next_v_velocity - self._u2v(next_u_velocity)
-                
+
             elif self.vel_solver == "neural_sph":
                 v_acceleration = next_v_velocity - previous_v_velocity
                 u_acceleration = next_u_velocity - self._v2u(next_v_velocity)
@@ -332,13 +397,17 @@ class GNNSimulator(BaseSimulator):
             elif self.vel_solver == "simple_u":
                 u_acceleration = next_u_velocity - previous_u_velocity
                 v_acceleration = next_v_velocity - self._u2v(previous_u_velocity)
-                
+
             elif self.vel_solver == "simple_u_closure":
-                au_sph = self._sph(previous_position, kwargs["n_part_per_traj"], previous_u_velocity)
+                au_sph = self._sph(
+                    previous_position, kwargs["n_part_per_traj"], previous_u_velocity
+                )
                 # au_sph is 3x larger than difference in u's
-                u_acceleration = next_u_velocity - previous_u_velocity -  au_sph * self._effective_dt
+                u_acceleration = (
+                    next_u_velocity - previous_u_velocity - au_sph * self._effective_dt
+                )
                 v_acceleration = next_v_velocity - previous_v_velocity
-                
+
                 """ Cosine similarity analysis
                 import numpy as np
                 def cosine(u, v, norm=True):
@@ -383,7 +452,7 @@ class GNNSimulator(BaseSimulator):
                         # au_sph /= au_sph.std()
                         u_acceleration = next_u_velocity - previous_u_velocity - au_sph * self._effective_dt * scale
                         lst.append(f"{u_acceleration.std():.6f}")
-                    
+
                     # Write u_acceleration.std() by appending to a file named target_std_{t[0]}_{t[1]}_{t[2]}.txt
                     cos = cosine(au_sph, au_target, norm=True).item()
                     with open(f"cos_{t[0]}_{t[1]}_{t[2]}.txt", "a") as f:
@@ -405,28 +474,28 @@ class GNNSimulator(BaseSimulator):
                 #         print(f"{target_file:<30} {len(inner_list):<10} {np.array(inner_list).mean():<10.4f}")
                 #     print("#"*50)
 
-                cos_0.1_1_False.txt            1005       0.0244    
-                cos_0.2_1_False.txt            1005       0.0187    
-                cos_0.5_1_False.txt            1005       0.0105    
-                cos_0_0_True.txt               1004       0.0332    
-                cos_0_1_False.txt              1005       0.0346    
-                cos_1_0_False.txt              1005       -0.0111   
-                cos_1_1_False.txt              1004       0.0041    
-                cos_1_1_True.txt               1004       0.0380    
-                cos_2_1_False.txt              1005       -0.0014   
-                cos_a_b.txt                    1005       0.0161    
-                cos_a_c.txt                    1005       -0.5016   
-                cos_b_c.txt                    1005       0.1257    
+                cos_0.1_1_False.txt            1005       0.0244
+                cos_0.2_1_False.txt            1005       0.0187
+                cos_0.5_1_False.txt            1005       0.0105
+                cos_0_0_True.txt               1004       0.0332
+                cos_0_1_False.txt              1005       0.0346
+                cos_1_0_False.txt              1005       -0.0111
+                cos_1_1_False.txt              1004       0.0041
+                cos_1_1_True.txt               1004       0.0380
+                cos_2_1_False.txt              1005       -0.0014
+                cos_a_b.txt                    1005       0.0161
+                cos_a_c.txt                    1005       -0.5016
+                cos_b_c.txt                    1005       0.1257
                 ##################################################
-                scale_argmin_0.1_1_False.txt   1005       0.3562    
-                scale_argmin_0.2_1_False.txt   1005       0.4010    
-                scale_argmin_0.5_1_False.txt   1005       0.4418    
-                scale_argmin_0_0_True.txt      1004       2.0976    
-                scale_argmin_0_1_False.txt     1005       0.3841    
-                scale_argmin_1_0_False.txt     1005       0.3015    
-                scale_argmin_1_1_False.txt     1004       0.3685    
-                scale_argmin_1_1_True.txt      1004       2.3386    
-                scale_argmin_2_1_False.txt     1005       0.2905   
+                scale_argmin_0.1_1_False.txt   1005       0.3562
+                scale_argmin_0.2_1_False.txt   1005       0.4010
+                scale_argmin_0.5_1_False.txt   1005       0.4418
+                scale_argmin_0_0_True.txt      1004       2.0976
+                scale_argmin_0_1_False.txt     1005       0.3841
+                scale_argmin_1_0_False.txt     1005       0.3015
+                scale_argmin_1_1_False.txt     1004       0.3685
+                scale_argmin_1_1_True.txt      1004       2.3386
+                scale_argmin_2_1_False.txt     1005       0.2905
                 """
 
             elif self.vel_solver == "simple_rlx":
@@ -434,22 +503,22 @@ class GNNSimulator(BaseSimulator):
                 if self.metadata["write_every"] > 1:
                     new_pos_temp = self.shift_fn(previous_position, self._u2v(previous_u_velocity))
                     av_rlx, v_rlx, new_position_temp = self._sph_rlx(
-                        new_pos_temp, 
-                        kwargs["n_part_per_traj"], 
+                        new_pos_temp,
+                        kwargs["n_part_per_traj"],
                         is_tvf=self.metadata["rlx_is_tvf"],
                         dt_factor=self.metadata["rlx_dt_factor"],
-                        num_steps=self.metadata["rlx_num_steps"]
+                        num_steps=self.metadata["rlx_num_steps"],
                     )
                     v_acceleration = self.displ_fn(next_position, new_position_temp)
                     # # equivalent to:
                     # v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity) - av_rlx).std()
                 else:
-                    v_acceleration = torch.zeros_like(u_acceleration)                
+                    v_acceleration = torch.zeros_like(u_acceleration)
 
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             u_normalized_acceleration = self._norm(u_acceleration, "ua")
             return v_normalized_acceleration, u_normalized_acceleration
-        else:   
+        else:
             # Compute acceleration
             v_acceleration = next_v_velocity - previous_v_velocity
             v_normalized_acceleration = self._norm(v_acceleration, "va")
@@ -484,17 +553,17 @@ class GNNLitModule(BaseLitModule):
         :param scheduler: The learning rate scheduler to use for training.
         """
         super().__init__(
-            net = net,
-            accelerator = accelerator,
-            optimizer = optimizer,
-            scheduler = scheduler,
-            visualize = visualize,
-            compile = compile,
-            seed = seed,
-            neuralsph = neuralsph,
-            num_rollout_steps = num_rollout_steps,
-            active_metrics = active_metrics,
-            metric_space = metric_space,
+            net=net,
+            accelerator=accelerator,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            visualize=visualize,
+            compile=compile,
+            seed=seed,
+            neuralsph=neuralsph,
+            num_rollout_steps=num_rollout_steps,
+            active_metrics=active_metrics,
+            metric_space=metric_space,
         )
 
         # Loss weights
@@ -512,13 +581,13 @@ class GNNLitModule(BaseLitModule):
             raise NotImplementedError(
                 "Pushforward is only implemented for alpha_u = 0.0, i.e. LagrangeBench setting."
             )
-        
+
         # Number of eval steps
         self.vel_solver = vel_solver
 
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
         return self.net.predict_accelerations(**features)
-    
+
     def model_step(self, batch: Any) -> Tensor:
         """Forward pass through the model and compute the loss for a_u and a_v."""
         # Determine the number of pushforward steps, if applicable
@@ -528,18 +597,18 @@ class GNNLitModule(BaseLitModule):
                 seed=self.seed, step=self.global_step, pushforward=self.pushforward
             )
             self.seed = updated_seed
-        #Random walk noise
+        # Random walk noise
         position_sequence_noise = get_random_walk_noise_for_position_sequence(
-            position_sequence=batch.enc_pos, 
+            position_sequence=batch.enc_pos,
             boundaries=self.net._boundaries,
             noise_std_last_step=self.net.noise_std,
-            ).to(self.device)
+        ).to(self.device)
 
         non_kinematic_mask = (batch.particle_types != 3).clone().detach()
         position_sequence_noise *= non_kinematic_mask.view(-1, 1, 1)
         if not self.training:
             position_sequence_noise *= 0.0
-        
+
         # Prepare features for the forward pass
         features = {
             "next_position": batch.target_pos[:, 0],  # Only the first target position
@@ -558,14 +627,14 @@ class GNNLitModule(BaseLitModule):
 
         # Perform pushforward if unroll_steps > 0
         if unroll_steps > 0:
-             # print(f"Pushing forward {unroll_steps} steps!!!")
+            # print(f"Pushing forward {unroll_steps} steps!!!")
             target_positions = batch.target_pos
             pred, target = pushforward_fn(features, target_positions, unroll_steps, self.forward)
         else:
             # Forward pass
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
             pred, target = self.forward(features)
-            
+
         if self.alpha_u != 0.0:
             # Split predictions and targets into a_u and a_v
             a_v_pred, a_u_pred = pred
@@ -574,8 +643,9 @@ class GNNLitModule(BaseLitModule):
             # Calculate MSE loss
             loss_v = particle_mse(a_v_pred, a_v_target, non_kinematic_mask)
             loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
-            self.log("train/loss_u", loss_u, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
-            self.log("train/loss_v", loss_v, prog_bar=True, batch_size=batch.batch_size, on_epoch=True)   
+            kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
+            self.log("train/loss_u", loss_u, **kwargs_log)
+            self.log("train/loss_v", loss_v, **kwargs_log)
 
             # Weighted combined loss
             loss = self.alpha_v * loss_v + self.alpha_u * loss_u
@@ -587,17 +657,17 @@ class GNNLitModule(BaseLitModule):
 
     def validation_step(self, batch: Tuple[Tensor, Tensor], **kwargs) -> Dict[str, Tensor]:
         """Perform a single validation step, using the forward method to infer positions."""
-        #ROLLOUT EVALUATION
+        # ROLLOUT EVALUATION
         # Evaluate validation loss, meaning a N-Step rollout
-        is_test = (("testing" in kwargs) and kwargs["testing"])
+        is_test = ("testing" in kwargs) and kwargs["testing"]
         split = "test" if is_test else "val"
-        self.net.neuralsph=self.neuralsph[split]
+        self.net.neuralsph = self.neuralsph[split]
         loss = eval_rollout(
             batch=batch,
-            simulator=self.net, 
-            metadata=self.net.metadata, 
+            simulator=self.net,
+            metadata=self.net.metadata,
             num_rollout_steps=self.num_rollout_steps,
-            pbc=any(self.net._pbc), 
+            pbc=any(self.net._pbc),
             device=self.net._device,
             active_metrics=self.active_metrics,
             vis_config=self.visualize[f"vis_{split}"],
@@ -609,7 +679,9 @@ class GNNLitModule(BaseLitModule):
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         if self.alpha_u != 0.0:
             position_loss, u_vel_loss = loss
-            self.log(f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)
+            self.log(
+                f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log
+            )
             self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
         else:
             position_loss = loss
@@ -617,9 +689,11 @@ class GNNLitModule(BaseLitModule):
             # for k in ["mse", "mse1", "mse5", "mse10"]:  #, "mse20", "mse50", "mse100"]:
             #     self.log(f"val/{k}", position_loss[k].mean(), **kwargs_log)
             #     self.log(f"val/{k}std", position_loss[k].std(), **kwargs_log)
-    
+
         self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
-        self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log) #only shifting velocity currently
+        self.log(
+            f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log
+        )  # only shifting velocity currently
         if "mse_pos" in position_loss:
             self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
 

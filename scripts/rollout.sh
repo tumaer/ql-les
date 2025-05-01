@@ -8,16 +8,16 @@
 #SBATCH --gres=gpu:1
 
 if [ "$#" -ne 2 ]; then
-  echo "Wrong number of arguments. Currently "$#", should be 2"
+  echo "Wrong number of arguments. Currently $#, should be 2"
   echo "Usage: sbatch scripts/rollout.sh <EVERY_N> <NSPH_SUFFIX>"
   echo "Currently supported: EVERY_N={1, 10}, NSPH_SUFFIX={'', '_neuralsph'}"
   exit 1
 fi
 
 EVERY_N=$1
-nsph_suffix=$2
+NSPH_SUFFIX=$2
 
-if [ $EVERY_N -eq 1 ]; then # every1
+if [ "$EVERY_N" -eq 1 ]; then # every1
     rlt_len=200 # 1000
     ckpts=(
         "2025-02-24_01-35-42"  # simple
@@ -25,7 +25,7 @@ if [ $EVERY_N -eq 1 ]; then # every1
         "2025-02-24_02-06-00"  # simple_u
         "2025-02-24_02-43-05"  # simple_rlx
     )
-elif [ $EVERY_N -eq 10 ]; then # every10
+elif [ "$EVERY_N" -eq 10 ]; then # every10
     rlt_len=20 # 100
     ckpts=(
         "2025-02-24_02-54-54"  # simple
@@ -59,7 +59,7 @@ elif [ "$NSPH_SUFFIX" == "_neuralsph" ]; then
         run_base model.neuralsph.test.dt_factor=2 model.neuralsph.test.num_steps=10
     done
 else
-    echo "NSPH_SUFFIX=${NSPH_SUFFIX} not supported. NSPH_SUFFIX={"", "_neuralsph"}"
+    echo "NSPH_SUFFIX=${NSPH_SUFFIX} not supported. NSPH_SUFFIX={\"\", \"_neuralsph\"}"
     exit
 fi
 

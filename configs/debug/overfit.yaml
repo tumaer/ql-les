@@ -17,10 +17,10 @@ trainer:
   log_every_n_steps: 1
   limit_train_batches: ${vars.num_rollout_steps}
   limit_val_batches: 1
-  limit_test_batches: 1  
+  limit_test_batches: 1
   val_check_interval: 10
   max_epochs: -1
-  max_steps: 200  # Train iters
+  max_steps: 200 # Train iters
 
 data:
   shuffle: False
