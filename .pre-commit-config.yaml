@@ -4,8 +4,7 @@ exclude: |
   (?x)^(
     venv/|
     logs/|
-    data/|
-    notebooks/
+    data/
   )
 
 repos:
