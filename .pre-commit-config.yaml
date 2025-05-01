@@ -81,8 +81,8 @@ repos:
           - mdformat-gfm
           - mdformat-tables
           - mdformat_frontmatter
-          # - mdformat-toc
-          # - mdformat-black
+          - mdformat-myst
+          - mdformat-ruff
 
   # word spelling linter
   - repo: https://github.com/codespell-project/codespell

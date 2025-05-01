@@ -8,7 +8,11 @@
 
 ## Description
 
-What it does
+We learn quasi-Lagrangian fluid dynamics using the following parametrizations:
+
+- "$\mathbf{u} \land \mathbf{v}$": Learn both physical velocity $\mathbf{u}$ and shifting velocity $\mathbf{v}$ simultaneously with one GNN.
+- "$\mathbf{u} \to \mathbf{v}$": Learn the field evolution $\mathbf{u}$ with a neural operator, and then simply advect particles.
+- "$\mathbf{v} \to \mathbf{u}$": Learn the dynamics $\mathbf{v}$ with a GNN, and then use a second GNN to approximate $\mathbf{u}$.
 
 ## Installation
 
@@ -32,8 +36,7 @@ pip install -e .
 #### Dev
 
 ```bash
-# first make sure pre-commit is installed
-# then install the pre-commit hooks .pre-commit-config.yaml
+# install the pre-commit hooks from .pre-commit-config.yaml
 pre-commit install
 # update pre-commit hook versions
 pre-commit autoupdate
