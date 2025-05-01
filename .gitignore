@@ -160,4 +160,4 @@ configs/local/default.yaml
 outputs/
 slogs/
 ./data/
-local/
+./logs/

@@ -1,6 +1,5 @@
 default_language_version:
   python: python3
-# exclude: "^(venv/|logs/|data/|notebooks/)"
 exclude: |
   (?x)^(
     venv/|
@@ -65,7 +64,6 @@ repos:
     hooks:
       - id: prettier
         types: [yaml]
-        exclude: "environment.yaml"
 
   # shell scripts linter
   - repo: https://github.com/shellcheck-py/shellcheck-py

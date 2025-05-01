@@ -1,10 +1,11 @@
-# Same as `code-quality-pr.yaml` but triggered on commit to main branch
-# and runs on all files (instead of only the changed ones)
+# Run pre-commit on push or PR to main branch
 
 name: Code Quality Main
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 jobs:
