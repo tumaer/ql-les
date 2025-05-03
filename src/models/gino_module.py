@@ -63,6 +63,7 @@ class InterpFNO(nn.Module):
         if kernel == "1/x^2":
             self.kernel_fn = XsqinvKernel(dx)
         elif kernel == "quintic":
+            self.cutoff = min(self.cutoff, 2 * dx)
             self.kernel_fn = QuinticKernel(2 / 3 * dx, dim=self.dim)
 
         grid = gen_grid_points(query_resolution, self.domain_size)
@@ -356,12 +357,15 @@ class GINOLitModule(BaseLitModule):
                 )
 
     def model_step(self, batch: Any) -> Tensor:
+        u_in = batch.enc_u[:, -1][None, ...]
+        u_in += torch.randn(u_in.shape, device=u_in.device) * self.net.noise_std
+
         # Train GINO on `u`
         u_pred = self.net.gino(
             input_geom=batch.enc_pos[:, -1],  # (N, D)
             latent_queries=self.net.latent_points,  # (G, G, D)
             output_queries=batch.target_pos[:, 0],  # (M, D)
-            x=batch.enc_u[:, -1][None, ...],  # (B, N, FNO_IN_CHANNELS)
+            x=u_in,  # (B, N, FNO_IN_CHANNELS)
         )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
 
         non_kinematic_mask = (batch.particle_types != 3).clone().detach()
