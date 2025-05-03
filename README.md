@@ -49,7 +49,7 @@ pre-commit run -a
 Add your datasets to `./data` using symbolic links.
 
 ```bash
-ln -s /my/dataset/dir ./data/`
+ln -s /my/dataset/dir ./data/
 ```
 
 ## How to run

@@ -11,6 +11,7 @@ net:
   isotropic_norm: false
   noise_std: 3.0e-4
   dataset_path: ${data.data_dir}
+  return_x_grid: false
   ### GINO kwargs
   in_gno_transform_type: linear
   out_gno_transform_type: linear

@@ -241,7 +241,7 @@ def pbc_duplication(x, box, n_particles_per_trajectory):
     ).reshape(-1, ndim)  # (num_copies, D)
     num_copies = shifts.size(0)
 
-    box = torch.tensor(box, dtype=x.dtype, device=x.device)
+    box = box.to(dtype=x.dtype, device=x.device)
 
     combined = []
     start = 0

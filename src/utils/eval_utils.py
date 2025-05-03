@@ -163,14 +163,23 @@ def eval_single_rollout(
         current_u_velocity = features["u_velocity"]  # initial u_velocity
         ground_truth_u_velocity = features["next_u_velocity"]
         u_vel_predictions = []
+        x_grid = None
         for step in range(num_rollout_steps):
-            next_position, new_u_velocity = simulator.predict_positions(
+            out = simulator.predict_positions(
                 current_positions=current_positions,
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],
                 particle_types=features["particle_types"],
                 pbc=pbc,
                 u_velocity=current_u_velocity,
+                x_grid=x_grid,
             )
+            assert isinstance(out, tuple), "Output from simulator should be a tuple."
+            if len(out) == 2:  # normal case
+                next_position, new_u_velocity = out
+            elif len(out) == 3:  # FNO with return_x_grid=True
+                next_position, new_u_velocity, x_grid = out
+            else:
+                raise ValueError("Invalid output from simulator.")
             kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
             next_position_ground_truth = ground_truth_positions[:, step]
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)

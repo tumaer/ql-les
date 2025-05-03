@@ -132,27 +132,55 @@ class InterpFNO(nn.Module):
 
         return f_interp
 
-    def forward(self, input_geom, latent_queries, output_queries, x):
-        # Shapes: (N,D), (G,G,D), (M,D), (B,N,FNO_IN_CHANNELS)
+    def forward(
+        self, input_geom, latent_queries, output_queries, x, x_grid=None, return_x_grid=False
+    ):
+        """Forward pass of the InterpFNO model.
+
+        Args:
+            input_geom (torch.Tensor): Input geometry (N, D).
+            latent_queries (torch.Tensor): Latent queries (G, G, D).
+            output_queries (torch.Tensor): Output queries (M, D).
+            x (torch.Tensor): Input features (B, N, FNO_IN_CHANNELS).
+            x_grid (torch.Tensor, optional): Grid features (B, D, N,...N). If x_grid not None, run rollout purely Eulerian.
+
+        Returns:
+            if x_grid is None:
+                torch.Tensor: Output features (B, M, FNO_OUT_CHANNELS).
+            else:
+                (torch.Tensor, torch.Tensor): Output features (B, M, FNO_OUT_CHANNELS), grid features (B, D, N,...N).
+        """
+
         # Interpolate velocities from points to grid
         r_latent_queries = latent_queries.reshape(-1, self.dim)
-        x = x[0]  # remove batch dimension TODO: don't forget that later
-        x_grid = self._interpolate(r=input_geom, r_target=r_latent_queries, f=x)
 
-        # Reshape grid to match FNO input
-        x_grid = x_grid.reshape(latent_queries.shape[:-1] + x.shape[-1:])
-        x_grid = x_grid.T[None, ...]  # (N,... N, D) -> (B, D, N,... N)
+        if x_grid is None:
+            x = x[0]  # remove batch dimension
+            x_grid = self._interpolate(r=input_geom, r_target=r_latent_queries, f=x)
+
+            # Reshape grid to match FNO input
+            x_grid = x_grid.reshape(latent_queries.shape[:-1] + x.shape[-1:])
+            # below: (N,... N, D) -> (B, D, N,... N)
+            x_grid = x_grid.permute(*torch.arange(x_grid.ndim - 1, -1, -1))[None, ...]
+
         # Run FNO on grid
-        x_grid = self.fno(x_grid)
+        x_grid_out = self.fno(x_grid)
         # Reverse reshaping
-        x_grid = x_grid.squeeze(0).T  # (B, D, N,... N) -> (N,... N, D)
+        # next two lines: (B, D, N,... N) -> (N,... N, D)
+        x_grid = x_grid_out.squeeze(0)
+        x_grid = x_grid.permute(*torch.arange(x_grid.ndim - 1, -1, -1))
         x_grid = x_grid.reshape(-1, x_grid.shape[-1])  # (N,... N, D) -> (N*N..., D)
         # Interpolate velocities from grid to points
         x = self._interpolate(r=r_latent_queries, r_target=output_queries, f=x_grid)
 
-        # TODO: this double smoothing procedure inevitably kills high frequencies
-        #   Does this work at all? FNO has to implicitly compensate for the smoothing
-        return x[None, ...]  # add batching dimension back in
+        if return_x_grid:  # rollout mode of InterpFNO
+            return x, x_grid_out
+        else:
+            # TODO: this double smoothing procedure inevitably kills high frequencies
+            #   Does this work at all? FNO has to implicitly compensate for the smoothing
+            return x[None, ...]  # add batching dimension back in
+        # else: # inference mode
+        #     return {"x": x[None, ...], "x_grid": x_grid_out}  # add batching dimension back in
 
 
 class GINOSimulator(BaseSimulator):
@@ -166,6 +194,7 @@ class GINOSimulator(BaseSimulator):
         noise_std: float,
         dataset_path: str,
         # v_solver: str, # "rlx", "neural", "hybrid"
+        return_x_grid: bool = False,  # applies only to InterpFNO and during rollout
         **gino_kwargs,
     ):
         super().__init__(
@@ -176,10 +205,17 @@ class GINOSimulator(BaseSimulator):
             dataset_path=dataset_path,
         )
 
+        box_size = [x[1] for x in self._boundaries]
+        query_resolution = gino_kwargs.get("query_resolution", [64] * self.dim)
+        self.latent_points = torch.tensor(gen_grid_points(query_resolution, box_size)).to(
+            self._device
+        )
+        self.return_x_grid = return_x_grid
+
         if model_name == "gino":
             print("Warning: Tested only on batch size 1!")
+            assert return_x_grid is False, "return_x_grid must be False for GINO model"
 
-            box_size = [x[1] for x in self._boundaries]
             self.gino = GINO(
                 in_channels=self.dim,  # input past u
                 out_channels=self.dim,  # directly output u
@@ -189,14 +225,9 @@ class GINOSimulator(BaseSimulator):
                 domain_size=box_size,
                 **gino_kwargs,
             )
-            query_resolution = gino_kwargs.get("query_resolution", [64] * self.dim)
-            self.latent_points = torch.tensor(gen_grid_points(query_resolution, box_size)).to(
-                self._device
-            )
         elif model_name == "interp_fno":
             print("Warning: Tested only on batch size 1!")
 
-            box_size = [x[1] for x in self._boundaries]
             # remove the prefix "fno_" from the keys in gino_kwargs
             fno_kwargs = {k[4:]: v for k, v in gino_kwargs.items() if k.startswith("fno_")}
             nbrs_kwargs = {k[5:]: v for k, v in gino_kwargs.items() if k.startswith("nbrs_")}
@@ -211,11 +242,6 @@ class GINOSimulator(BaseSimulator):
                 **nbrs_kwargs,
                 **fno_kwargs,
             )
-            self.gino.to(self._device)
-            query_resolution = gino_kwargs.get("query_resolution", [64] * self.dim)
-            self.latent_points = torch.tensor(gen_grid_points(query_resolution, box_size)).to(
-                self._device
-            )
         else:
             raise ValueError(f"Model name {model_name} not recognized.")
 
@@ -226,6 +252,7 @@ class GINOSimulator(BaseSimulator):
         n_particles_per_trajectory: Tensor,
         particle_types: Tensor,
         pbc,
+        **kwargs,
     ):
         if pbc:
             current_positions = current_positions % self._boundaries
@@ -260,10 +287,18 @@ class GINOSimulator(BaseSimulator):
             latent_queries=self.latent_points,  # (G, G, D)
             output_queries=new_position,  # (M, D)
             x=most_recent_u_velocity[None, ...],  # (B, N, FNO_IN_CHANNELS)
-        )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
-        new_u_velocity = self._denorm(new_u_velocity_norm, "uu")
-
-        return new_position, new_u_velocity
+            x_grid=kwargs.get("x_grid", None),  # (B, D, N,...N)
+            return_x_grid=self.return_x_grid,
+        )
+        if self.return_x_grid:  # optional with interp_fno mode
+            new_u_velocity_norm, u_grid = new_u_velocity_norm
+            new_u_velocity = self._denorm(new_u_velocity_norm, "uu")
+            return new_position, new_u_velocity, u_grid
+        else:
+            # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
+            new_u_velocity_norm = new_u_velocity_norm[0]
+            new_u_velocity = self._denorm(new_u_velocity_norm, "uu")
+            return new_position, new_u_velocity
 
 
 class GINOLitModule(BaseLitModule):
