@@ -21,6 +21,7 @@ We learn quasi-Lagrangian fluid dynamics using the following parametrizations:
 ```bash
 # clone project
 git clone --recurse-submodules https://github.com/arturtoshev/sph_les
+# if you forgot `--recurse-submodule`, run `git submodule update --init`
 cd sph_les
 
 # create virtual environment
@@ -60,10 +61,3 @@ Train model with chosen experiment configuration.
 # train on GPU
 python src/train.py experiment=gns_kolm2d_every1 trainer=gpu
 ```
-
-## TODOs
-
-- multiruns: with `python train.py -m seed=1,2,3,4,5` https://hydra.cc/docs/next/tutorials/basic/running_your_app/multi-run
-- sweeps: `python train.py -m hparams_search=mnist_optuna experiment=example`
-- 6 sequential runs: `python train.py -m data.batch_size=32,64,128 model.lr=0.001,0.0005`
-- Slurm: `override /hydra/launcher@_here_`
