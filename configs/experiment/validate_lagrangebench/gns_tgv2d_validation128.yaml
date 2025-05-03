@@ -4,7 +4,7 @@ defaults:
   - override /data: tgv2d
   - override /trainer: gpu
   - override /vars: tgv2d
-  - override /callbacks: custom
+  - override /callbacks: default
   - override /logger: wandb
 
 model:

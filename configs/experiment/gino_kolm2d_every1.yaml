@@ -3,8 +3,8 @@ defaults:
   - override /model: gino
   - override /data: kolm2d_every1
   - override /trainer: gpu
-  - override /vars: gino2d
-  - override /callbacks: custom
+  - override /vars: default
+  - override /callbacks: default
   - override /logger: wandb
 
 model:

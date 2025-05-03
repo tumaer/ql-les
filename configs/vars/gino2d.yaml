@@ -1,3 +1,0 @@
-dim: 2
-num_rollout_steps: 20
-input_seq_length: 2

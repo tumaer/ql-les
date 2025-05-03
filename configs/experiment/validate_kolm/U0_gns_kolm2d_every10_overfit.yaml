@@ -4,7 +4,7 @@ defaults:
   - override /data: kolm2d_every10
   - override /trainer: gpu
   - override /vars: kolm2d
-  - override /callbacks: custom
+  - override /callbacks: default
   - override /logger: wandb
 
 model:

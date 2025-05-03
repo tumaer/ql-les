@@ -4,7 +4,7 @@ defaults:
   - override /model: gns
   - override /data: tgv2d
   - override /trainer: gpu
-  - override /callbacks: custom
+  - override /callbacks: default
   - override /logger: wandb
 
 model:
