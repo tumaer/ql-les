@@ -39,9 +39,9 @@ SEED="$2"  # for reproducibility
 EXTRAS="$3"  # for additional arguments
 
 echo "Training InterpFNO on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
+# shellcheck disable=SC2086
 python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.model_name=interp_fno \
   seed="${SEED}" +logger.wandb.name=fno ${EXTRAS}
-
 ### Runs
 
 # Code validation:
