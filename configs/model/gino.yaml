@@ -29,7 +29,7 @@ net:
   nbrs_condition: knn
   nbrs_k: 3
   nbrs_cutoff_factor: 3.0 # for quintic kernel, we use 3*average_particle_distance
-  nbrs_kernel: "quintic" # "quintic", "xsqinv"
+  nbrs_kernel: "xsqinv" # "quintic", "xsqinv"
 
 # Optimizer configuration
 optimizer:

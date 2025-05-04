@@ -40,7 +40,7 @@ EXTRAS="$3"  # for additional arguments
 
 echo "Training InterpFNO on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
 python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.model_name=interp_fno \
-  seed="${SEED}" +logger.wandb.name=fno "${EXTRAS}"
+  seed="${SEED}" +logger.wandb.name=fno ${EXTRAS}
 
 ### Runs
 
@@ -49,8 +49,8 @@ python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.mode
 
 #################### hyperparameter tuning every1 ####################
 ### Run 05.05.25 -> change validation to interpolate u to grid
-sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
-sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.nbrs_k=10"
+# sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
+# sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.nbrs_k=10"
 
 
 ### Run 04.05.25
