@@ -24,10 +24,12 @@ net:
   fno_n_layers: 4
   fno_implementation: "reconstructed" # "reconstructed", "factorized"
   fno_skip: "linear" # "linear", "soft-gating"
-  # next arguments are for interp_fno
   query_resolution: [64, 64]
+  # next arguments are for interp_fno
   nbrs_condition: knn
   nbrs_k: 3
+  nbrs_cutoff_factor: 3.0 # for quintic kernel, we use 3*average_particle_distance
+  nbrs_kernel: "quintic" # "quintic", "xsqinv"
 
 # Optimizer configuration
 optimizer:

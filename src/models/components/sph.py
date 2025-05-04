@@ -5,7 +5,7 @@ import torch
 from torch_scatter import scatter_add
 
 from src.utils.nbrs_utils import pos_init_cartesian_2d, shift_fn, displ_fn, nearest
-
+from src.utils.interpolate import QuinticKernel
 
 EPS = torch.finfo(torch.float32).eps
 
@@ -31,42 +31,6 @@ class TaitEoS:
         """Compute density from pressure."""
         p_temp = p + self.p_ref - self.p_bg
         return self.rho_ref * (p_temp / self.p_ref) ** (1 / self.gamma)
-
-
-class QuinticKernel:
-    """The quintic kernel function of Morris."""
-
-    def __init__(self, h, dim=3):
-        self._one_over_h = 1.0 / h
-
-        self._normalized_cutoff = 3.0
-        self.cutoff = self._normalized_cutoff * h
-        if dim == 1:
-            self._sigma = 1.0 / 120.0 * self._one_over_h
-        elif dim == 2:
-            self._sigma = 7.0 / 478.0 / np.pi * self._one_over_h**2
-        elif dim == 3:
-            self._sigma = 3.0 / 359.0 / np.pi * self._one_over_h**3
-
-    def w(self, r):
-        q = r * self._one_over_h
-        q1 = torch.clamp(1.0 - q, min=0.0)
-        q2 = torch.clamp(2.0 - q, min=0.0)
-        q3 = torch.clamp(3.0 - q, min=0.0)
-
-        return self._sigma * (q3**5 - 6.0 * q2**5 + 15.0 * q1**5)
-
-    def grad_w(self, r):
-        """Evaluates the 1D kernel gradient at the radial distance r."""
-        q = r * self._one_over_h
-        q1 = torch.clamp(1.0 - q, min=0.0)
-        q2 = torch.clamp(2.0 - q, min=0.0)
-        q3 = torch.clamp(3.0 - q, min=0.0)
-
-        grad_w_q = self._sigma * (-5.0 * (q3**4 - 6.0 * q2**4 + 15.0 * q1**4))
-        grad_w_r = grad_w_q * self._one_over_h
-
-        return grad_w_r
 
 
 def relax_wrapper(

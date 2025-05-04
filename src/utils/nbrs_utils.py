@@ -123,18 +123,16 @@ def _nearest_batch(
             ]
         )
         if condition == "radius":
-            k = k if k is not None else 100
             edge_index = radius(
-                x=x, y=query, r=cutoff, batch_x=batch_ids, batch_y=batch_y, max_num_neighbors=k
+                x=x, y=query, r=cutoff, batch_x=batch_ids, batch_y=batch_y, max_num_neighbors=300
             )
         elif condition == "knn":
             edge_index = knn(x=x, y=query, k=k, batch_x=batch_ids, batch_y=batch_y)
     else:
         # this implementation is eventually faster than setting query=x
         if condition == "radius":
-            k = k if k is not None else 100
             edge_index = radius_graph(
-                x, r=cutoff, batch=batch_ids, loop=add_self_edges, max_num_neighbors=k
+                x, r=cutoff, batch=batch_ids, loop=add_self_edges, max_num_neighbors=300
             )
         elif condition == "knn":
             edge_index = knn_graph(x, k=k, batch=batch_ids, loop=add_self_edges)
@@ -188,14 +186,13 @@ def _nearest_batch_pbc(
 
     # Compute connectivity graph from duplicated (x) to original (y)
     if condition == "radius":
-        k = k if k is not None else 100
         edge_index = radius(
             x=combined_positions,
             y=query,
             r=cutoff,
             batch_x=batch_x,
             batch_y=batch_y,
-            max_num_neighbors=k,
+            max_num_neighbors=300,
         )
     elif condition == "knn":
         edge_index = knn(
@@ -334,6 +331,7 @@ if __name__ == "__main__":
         query = n_pptr_query = None
 
     def plt_nbrs(ax, i, pos_demo, query, nbrs):
+        """Helper function."""
         if use_query:
             ax.scatter(query[:, 0], query[:, 1], marker="x", alpha=0.5)
         # for each neighbor of particle i, draw a line to its neighbors

@@ -25,7 +25,7 @@ fi
 # model.optimizer.lr=0.0001
 # model.net.nbrs_condition="knn"/"radius"
 # model.net.nbrs_k=3 / +model.net.nbrs_cutoff=0.2
-# +model.net.nbrs_kernel="1/x^2"/"quintic"
+# +model.net.nbrs_kernel="xsqinv"/"quintic"
 # model.scheduler.step_size=100_000
 # model.net.noise_std=0.0
 # model.net.return_x_grid=True

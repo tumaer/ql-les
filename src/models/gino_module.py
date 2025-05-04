@@ -6,25 +6,12 @@ import torch
 from torch import Tensor, nn
 from neuralop.models.gino import GINO
 from neuralop.models.fno import FNO
-from torch_scatter import scatter_add
 
-from src.models.components.sph import QuinticKernel
 from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
-from src.utils.nbrs_utils import gen_grid_points, nearest, displ_fn
-
-
-class XsqinvKernel:
-    """The 1/x^2 kernel function from PointNet++."""
-
-    def __init__(self, h, dim=3):
-        self._one_over_h = 1.0 / h
-        self._normalized_cutoff = 3.0  # arbitrarily chosen
-        self.cutoff = self._normalized_cutoff * h
-
-    def w(self, r):
-        return 1 / (r * self._one_over_h) ** 2
+from src.utils.nbrs_utils import gen_grid_points
+from src.utils.interpolate import Interpolator
 
 
 class InterpFNO(nn.Module):
@@ -36,102 +23,27 @@ class InterpFNO(nn.Module):
         domain_size,
         dim,
         dx,
-        query_resolution=[64, 64],
         condition="knn",
         k=None,
-        cutoff=None,
-        kernel="1/x^2",
+        cutoff_factor=None,
+        kernel="xsqinv",
         **fno_kwargs,
     ):
         super().__init__()
         self.fno = FNO(**fno_kwargs)
 
-        # Dataset metadata
-        self.is_periodic = is_periodic  # e.g. True
-        self.register_buffer("domain_size", torch.tensor(domain_size))  # e.g. [1.0, 1.0]
-        self.dim = dim  # e.g. 2
-
-        # Neighbors search algorithm
-        self.condition = condition
-        if self.condition == "radius":
-            assert cutoff is not None, "cutoff must be provided for radius condition"
-        elif self.condition == "knn":
-            assert k is not None, "k must be provided for knn condition"
-        self.k = k
-        self.cutoff = cutoff
-
-        if kernel == "1/x^2":
-            self.kernel_fn = XsqinvKernel(dx)
-        elif kernel == "quintic":
-            self.cutoff = min(self.cutoff, 2 * dx)
-            self.kernel_fn = QuinticKernel(2 / 3 * dx, dim=self.dim)
-
-        grid = gen_grid_points(query_resolution, self.domain_size)
-        self.register_buffer("grid", torch.tensor(grid.reshape(-1, self.dim)))
-
-    def displ_fn(self, r1, r2):
-        return displ_fn(r1, r2, self.domain_size, self.is_periodic)
-
-    def _interpolate(self, r, r_target, f):
-        """Shepard interpolation between two point clouds."""
-        # Compute distances
-        # TODO: works only for batch size 1 for now
-        n_part_per_traj = torch.tensor([r.shape[0]], dtype=torch.int64, device=r.device)
-        n_pptr_query = torch.tensor([r_target.shape[0]], dtype=torch.int64, device=r.device)
-        edge_index = nearest(
-            r,
-            n_part_per_traj,
-            self.is_periodic,
-            self.domain_size,
-            condition=self.condition,
-            k=self.k,
-            cutoff=self.cutoff,
-            query=r_target,
-            n_pptr_query=n_pptr_query,
+        self.interpolate = Interpolator(
+            is_periodic=is_periodic,
+            domain_size=domain_size,
+            dim=dim,
+            dx=dx,
+            condition=condition,
+            k=k,
+            cutoff_factor=cutoff_factor,
+            kernel=kernel,
         )
-        i_s, j_s = edge_index
-        r_i, r_j = r_target[i_s], r[j_s]
-        dr_ij = self.displ_fn(r_i, r_j)
-        dist = torch.norm(dr_ij, dim=-1)
-
-        # Compute weights
-        w_dist = self.kernel_fn.w(dist)
-        w_dist_sum = scatter_add(w_dist, i_s, dim=0, dim_size=len(r_target))
-
-        # Interpolate
-        num_targets = r_target.shape[-2]  # Shape (B, N, D)
-        f_interp = scatter_add(
-            w_dist[:, None] * f[j_s], i_s, dim=0, dim_size=num_targets
-        )  # TODO: check j_s
-        f_interp /= w_dist_sum[:, None]
-        # assert no nan or inf numbers
-        assert torch.all(torch.isfinite(f_interp)), "Interpolation resulted in NaN or Inf values"
-        assert torch.all(w_dist_sum > 0), "Interpolation resulted in zero weights"
-
-        # def plt_interp(ind, r, r_target, f, f_interp, i_s, j_s):
-        #     # r_target = r_target.cpu().numpy()
-        #     # r = r.cpu().numpy()
-        #     # f = f.cpu().numpy()
-        #     # f_interp = f_interp.cpu().numpy()
-        #     # i_s = i_s.cpu().numpy()
-        #     # j_s = j_s.cpu().numpy()
-        #     import matplotlib.pyplot as plt
-        #     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
-        #     axs[0].scatter(r[:,0], r[:,1], c=f[:,0], s=1)
-        #     axs[1].scatter(r[:,0], r[:,1], c=f[:,0], s=1)
-        #     axs[1].scatter(r_target[:,0], r_target[:,1], c=f_interp[:,0], s=1, marker='x')
-        #     # for particle 0 in r_target, plot edges to corresponding particles in r
-        #     for i in range(len(i_s)):
-        #         if i_s[i] == ind:
-        #             axs[1].plot([r_target[i_s[i],0], r[j_s[i],0]], [r_target[i_s[i],1], r[j_s[i],1]], 'k-', lw=0.5)
-        #     axs[0].set_title("Input geom")
-        #     axs[1].set_title("Grid geom")
-        #     plt.tight_layout()
-        #     fig.savefig("interp_fno_input_grid.png", dpi=600)
-        #     plt.close(fig)
-        # plt_interp(2, r, r_target, f, f_interp, i_s, j_s)
-
-        return f_interp
+        # grid = gen_grid_points(query_resolution, self.domain_size)
+        # self.register_buffer("grid", torch.tensor(grid.reshape(-1, self.dim)))
 
     def forward(
         self, input_geom, latent_queries, output_queries, x, x_grid=None, return_x_grid=False
@@ -153,11 +65,11 @@ class InterpFNO(nn.Module):
         """
 
         # Interpolate velocities from points to grid
-        r_latent_queries = latent_queries.reshape(-1, self.dim)
+        r_latent_queries = latent_queries.reshape(-1, input_geom.shape[-1])
 
         if x_grid is None:
             x = x[0]  # remove batch dimension
-            x_grid = self._interpolate(r=input_geom, r_target=r_latent_queries, f=x)
+            x_grid = self.interpolate(r=input_geom, r_target=r_latent_queries, f=x)
 
             # Reshape grid to match FNO input
             x_grid = x_grid.reshape(latent_queries.shape[:-1] + x.shape[-1:])
@@ -172,7 +84,7 @@ class InterpFNO(nn.Module):
         x_grid = x_grid.permute(*torch.arange(x_grid.ndim - 1, -1, -1))
         x_grid = x_grid.reshape(-1, x_grid.shape[-1])  # (N,... N, D) -> (N*N..., D)
         # Interpolate velocities from grid to points
-        x = self._interpolate(r=r_latent_queries, r_target=output_queries, f=x_grid)
+        x = self.interpolate(r=r_latent_queries, r_target=output_queries, f=x_grid)
 
         if return_x_grid:  # rollout mode of InterpFNO
             return x, x_grid_out
@@ -235,7 +147,6 @@ class GINOSimulator(BaseSimulator):
             self.gino = InterpFNO(
                 # in_channels=self.dim,  # input past u
                 out_channels=self.dim,  # directly output u
-                query_resolution=gino_kwargs["query_resolution"],
                 is_periodic=any(self._pbc),
                 domain_size=box_size,
                 dim=self.dim,
