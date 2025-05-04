@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from torch_scatter import scatter_add
-from src.utils.nbrs_utils import displ_fn, nearest
+from src.utils.nbrs_utils import displ_fn, nearest, gen_grid_points
 
 
 class XsqinvKernel:
@@ -107,9 +107,6 @@ class Interpolator(torch.nn.Module):
         Returns:
             torch.Tensor: Interpolated features at the target point cloud (shape: (M, F)).
         """
-        # Compute distances
-        # TODO: works only for batch size 1 for now
-
         # assert that if npptr is not None, then also npptr_target is not None, and vice versa
         assert (npptr is None) == (npptr_target is None), (
             "Either both or none of npptr and npptr_target must be provided"
@@ -153,6 +150,60 @@ class Interpolator(torch.nn.Module):
         assert torch.all(w_dist_sum > 0), "Interpolation resulted in zero weights"
 
         return f_interp
+
+
+class GridInterpolator(Interpolator):
+    """Grid interpolator."""
+
+    def __init__(
+        self,
+        is_periodic,
+        domain_size,
+        dim,
+        dx,
+        condition,
+        k=None,
+        cutoff_factor=2,
+        kernel="quintic",
+    ):
+        super().__init__(
+            is_periodic,
+            domain_size,
+            dim,
+            dx,
+            condition,
+            k=k,
+            cutoff_factor=cutoff_factor,
+            kernel=kernel,
+        )
+
+        grid = gen_grid_points([round(d / dx) for d in domain_size], domain_size)
+        self.register_buffer("grid", torch.tensor(grid).reshape(-1, dim))
+
+    def __call__(self, r, f, npptr=None):
+        """Shepard interpolation from point cloud to a grid.
+
+        Args:
+            r (torch.Tensor): Positions of the source point cloud (shape: (N, D)).
+            f (torch.Tensor): Features of the source point cloud (shape: (N, F)).
+            npptr (torch.Tensor, optional): number of particles per trajectory (shape: (B,)).
+
+        Returns:
+            torch.Tensor: Interpolated features at the target point cloud (shape: (M, F)).
+        """
+
+        if npptr is not None:
+            # batch the grid
+            batch_size = npptr.shape[0]
+            r_target = self.grid.repeat(batch_size, 1)
+            num_grid_points = self.grid.shape[0]
+            npptr_target = torch.tensor(
+                [num_grid_points] * batch_size, dtype=torch.int64, device=r.device
+            )
+        else:
+            r_target = self.grid
+
+        return super().__call__(r, r_target, f, npptr=npptr, npptr_target=npptr_target)
 
 
 if __name__ == "__main__":

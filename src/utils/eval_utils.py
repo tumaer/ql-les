@@ -24,6 +24,7 @@ def eval_rollout(
     vis_config=None,
     trajectory_idx=0,
     metric_space="norm",
+    interpolate=None,
     **kwargs,
 ):
     """
@@ -68,6 +69,7 @@ def eval_rollout(
             active_metrics,
             u_vel=u_vel,
             metric_space=metric_space,
+            interpolate=interpolate,
         )
 
         if not u_vel:
@@ -104,6 +106,7 @@ def eval_single_rollout(
     active_metrics,
     u_vel=False,
     metric_space="norm",
+    interpolate=None,
 ):
     """
     Evaluate a single trajectory rollout.
@@ -124,6 +127,7 @@ def eval_single_rollout(
     current_positions = features["enc_pos"]  # initial positions (N, T_in, D)
     dim = current_positions.shape[-1]
     position_predictions = []
+    device = current_positions.device
 
     if u_vel is False:
         for step in range(num_rollout_steps):
@@ -202,10 +206,26 @@ def eval_single_rollout(
         trajectory_rollout = position_predictions
         u_vel_rollout = u_vel_predictions
 
-        du = u_vel_predictions - ground_truth_u_velocity  # physical space
+        # interpolate both u values to the same grid
+        assert interpolate is not None, "Interpolator needed if u_vel=True."
+        npptr = torch.tensor(
+            [next_position.shape[0]] * num_rollout_steps, dtype=torch.int64, device=device
+        )
+        u_pred = interpolate(
+            r=position_predictions.reshape(-1, dim),
+            f=u_vel_predictions.reshape(-1, dim),
+            npptr=npptr,
+        ).reshape(num_rollout_steps, -1, dim)
+        u_gt = interpolate(
+            r=ground_truth_positions.reshape(-1, dim),
+            f=ground_truth_u_velocity.reshape(-1, dim),
+            npptr=npptr,
+        ).reshape(num_rollout_steps, -1, dim)
+
+        du = u_pred - u_gt  # physical space
 
         if metric_space == "norm":
-            du /= torch.tensor(metadata["u_std"], device=du.device)
+            du /= torch.tensor(metadata["u_std"], device=device)
         elif metric_space == "diff":
             du *= metadata["dt"] * metadata["write_every"]
 
@@ -221,7 +241,6 @@ def eval_single_rollout(
             most_recent_position=features["enc_pos"][:, -1],
         )
         # print(computed_position_metrics["mse"])
-        # TODO: eval u metrics on grid!
         computed_vel_metrics = (du**2).mean(dim=(1, 2))
         # print(computed_vel_metrics)
         # import matplotlib.pyplot as plt

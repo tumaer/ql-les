@@ -11,7 +11,7 @@ from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
 from src.utils.nbrs_utils import gen_grid_points
-from src.utils.interpolate import Interpolator
+from src.utils.interpolate import Interpolator, GridInterpolator
 
 
 class InterpFNO(nn.Module):
@@ -247,6 +247,17 @@ class GINOLitModule(BaseLitModule):
 
         self.loss_fn = loss_fn
 
+        self.metrics_interpolate = GridInterpolator(
+            is_periodic=any(self.net._pbc),
+            domain_size=[x[1] for x in self.net._boundaries],
+            dim=self.net.dim,
+            dx=self.net.metadata["dx"],
+            condition=metric_space.interpolate["condition"],
+            k=metric_space.interpolate["k"],
+            cutoff_factor=metric_space.interpolate["cutoff_factor"],
+            kernel=metric_space.interpolate["kernel"],
+        )
+
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Remove `_metadata` key from the checkpoint.
         See https://github.com/neuraloperator/neuraloperator/pull/493
@@ -303,19 +314,18 @@ class GINOLitModule(BaseLitModule):
             trajectory_idx=self.trajectory_idx,
             u_vel=True,
             metric_space=self.metric_space.test if is_test else self.metric_space.val,
+            interpolate=self.metrics_interpolate,
         )
 
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         position_loss, u_vel_loss = loss
-        self.log(f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log)
-        self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
+        self.log(f"{split}/loss", u_vel_loss.mean(), **kwargs_log)
+        self.log(f"{split}/u_loss_grid", u_vel_loss.mean(), **kwargs_log)
 
-        self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
-        self.log(
-            f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log
-        )  # only shifting velocity currently
-        if "mse_pos" in position_loss:
-            self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
+        # self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
+        # self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log)  # v
+        # if "mse_pos" in position_loss:
+        #     self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
 
         self.metrics_dump[self.trajectory_idx] = loss
         self.trajectory_idx += 1

@@ -75,6 +75,11 @@ active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
   val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
+  interpolate:
+    condition: radius # "radius", "knn"
+    k: 15
+    cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
+    kernel: "quintic" # "quintic", "xsqinv"
 
 visualize:
   vis_test:

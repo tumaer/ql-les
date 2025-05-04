@@ -5,7 +5,7 @@ import numpy as np
 from torch_geometric.nn import radius_graph, radius, knn, knn_graph
 
 
-def gen_grid_points(n, box_size):
+def gen_grid_points(n: list, box_size: list) -> np.ndarray:
     """Generate cartesian grid points.
 
     Args:

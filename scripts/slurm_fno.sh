@@ -48,6 +48,12 @@ python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.mode
 # ./scripts/slurm_fno.sh 1 0 "model.optimizer.lr=0.0001 model.net.nbrs_condition=radius model.net.nbrs_k=null +model.net.nbrs_cutoff=0.2 +model.net.nbrs_kernel=quintic model.scheduler.step_size=100_000 model.net.noise_std=0.0 model.net.return_x_grid=True model.net.fno_n_modes=[32,32] model.net.fno_hidden_channels=32 model.net.fno_n_layers=4 logger.wandb.offline=True"
 
 #################### hyperparameter tuning every1 ####################
+### Run 05.05.25 -> change validation to interpolate u to grid
+sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
+sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.nbrs_k=10"
+
+
+### Run 04.05.25
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.optimizer.lr=0.0003"
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"  # DEFAULTS
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.optimizer.lr=0.00003"
@@ -60,8 +66,7 @@ python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.mode
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.noise_std=0.001"
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.noise_std=0.0001"
 
-
-# Every1 summary:
-# best noise: 0.00003
-# lr: 200k-0.001 = 200k-0.0003 = 500k-0.0001; 200k-0.0001 sucks
-# new defaults: noise_std=0.00003, transition_steps=250000, init_value=0.001
+# Summary:
+# lr: close to no effect. Stick with 1e-4
+# loss depends heavily on # neighbors -> the lower k, the better.
+# noise has no effect
