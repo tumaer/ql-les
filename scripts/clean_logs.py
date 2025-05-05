@@ -8,7 +8,7 @@ from wandb.apis.public import Api
 from datetime import datetime
 
 
-def delete_local_runs_not_on_wandb(api: Api, from_date: int, entity: str, local_dir: str):
+def delete_local_runs_not_on_wandb(from_date: int, entity: str, local_dir: str, dry_run: bool):
     """
     Delete local runs that are not present in the WANDB API.
 
@@ -51,8 +51,10 @@ def delete_local_runs_not_on_wandb(api: Api, from_date: int, entity: str, local_
     # Delete local runs that are not present in the WANDB API
     for local_dir in tqdm(local_runs, desc="Deleting local runs not on WANDB"):
         if local_dir not in api_dirs:
-            print(f"Deleting local run: {local_dir}")
-            shutil.rmtree(local_dir)
+            print(f"Deleting: {local_dir}")
+            if not dry_run:
+                # Delete the local run
+                shutil.rmtree(local_dir)
     print("Finished deleting local runs not on WANDB.")
 
 
@@ -61,6 +63,10 @@ if __name__ == "__main__":
     parser.add_argument("--from_date", type=str, default="2025-01-01")
     parser.add_argument("--entity", type=str, default=os.getenv("WANDB_ENTITY"))
     parser.add_argument("--local_dir", type=str, default="logs/")
+    parser.add_argument("--dry_run", action="store_true", help="If set, do not delete any files.")
     args = parser.parse_args()
 
-    delete_local_runs_not_on_wandb(args.from_date, args.entity, args.local_dir)
+    delete_local_runs_not_on_wandb(args.from_date, args.entity, args.local_dir, args.dry_run)
+
+    # Dry run:
+    # python scripts/clean_logs.py --dry_run

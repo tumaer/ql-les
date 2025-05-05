@@ -48,11 +48,9 @@ python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.mode
 # ./scripts/slurm_fno.sh 1 0 "model.optimizer.lr=0.0001 model.net.nbrs_condition=radius model.net.nbrs_k=null +model.net.nbrs_cutoff=0.2 +model.net.nbrs_kernel=quintic model.scheduler.step_size=100_000 model.net.noise_std=0.0 model.net.return_x_grid=True model.net.fno_n_modes=[32,32] model.net.fno_hidden_channels=32 model.net.fno_n_layers=4 logger.wandb.offline=True"
 
 #################### hyperparameter tuning every1 ####################
-### Run 05.05.25 -> change validation to interpolate u to grid
+### Run 05.05.25 -> change validation to interpolate u to grid, and compute training loss on grid
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.nbrs_k=10"
-#     with training loss on a grid:
-# sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
 
 ### Run 04.05.25
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.optimizer.lr=0.0003"
