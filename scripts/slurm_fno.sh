@@ -51,7 +51,8 @@ python src/train.py experiment=gino_kolm2d_every"${EVERY_N}".yaml model.net.mode
 ### Run 05.05.25 -> change validation to interpolate u to grid
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.net.nbrs_k=10"
-
+#     with training loss on a grid:
+# sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True"
 
 ### Run 04.05.25
 # sbatch scripts/slurm_fno.sh 1 12345 "model.net.return_x_grid=True model.optimizer.lr=0.0003"

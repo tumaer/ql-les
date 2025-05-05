@@ -279,19 +279,43 @@ class GINOLitModule(BaseLitModule):
                 )
 
     def model_step(self, batch: Any) -> Tensor:
+        """Forward pass and loss calculation."""
+
         u_in = batch.enc_u[:, -1][None, ...]
         u_in += torch.randn(u_in.shape, device=u_in.device) * self.net.noise_std
 
-        # Train GINO on `u`
-        u_pred = self.net.gino(
-            input_geom=batch.enc_pos[:, -1],  # (N, D)
-            latent_queries=self.net.latent_points,  # (G, G, D)
-            output_queries=batch.target_pos[:, 0],  # (M, D)
-            x=u_in,  # (B, N, FNO_IN_CHANNELS)
-        )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
+        target_u_norm = self.net._norm(batch.target_u.squeeze(), "uu")
+
+        if self.net.model_name == "gino":
+            # Train GINO on `u`
+            u_pred = self.net.gino(
+                input_geom=batch.enc_pos[:, -1],  # (N, D)
+                latent_queries=self.net.latent_points,  # (G, G, D)
+                output_queries=batch.target_pos[:, 0],  # (M, D)
+                x=u_in,  # (B, N, FNO_IN_CHANNELS)
+            )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
+        elif self.net.model_name == "interp_fno":
+            # Train InterpFNO on `u`
+            _, u_pred = self.net.gino(
+                input_geom=batch.enc_pos[:, -1],  # (N, D)
+                latent_queries=self.net.latent_points,  # (G, G, D)
+                output_queries=batch.target_pos[:, 0],  # (M, D)
+                x=u_in,  # (B, N, FNO_IN_CHANNELS)
+                return_x_grid=True,
+            )
+            # interpolate target to same grid as FNO grid
+            r_latent_queries = self.net.latent_points.reshape(-1, self.net.dim)
+            target_u_norm = self.net.gino.interpolate(
+                r=batch.target_pos[:, 0],
+                r_target=r_latent_queries,
+                f=target_u_norm,
+            )
+            # reshape predictions from grid to points
+            u_pred = u_pred.squeeze(0)
+            u_pred = u_pred.permute(*torch.arange(u_pred.ndim - 1, -1, -1))
+            u_pred = u_pred.reshape(-1, u_pred.shape[-1])  # (N,... N, D) -> (N*N..., D)
 
         non_kinematic_mask = (batch.particle_types != 3).clone().detach()
-        target_u_norm = self.net._norm(batch.target_u.squeeze(), "uu")
         loss_u = particle_mse(u_pred, target_u_norm, non_kinematic_mask)
         return loss_u
 
