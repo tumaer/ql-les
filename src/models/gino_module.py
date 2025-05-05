@@ -346,10 +346,10 @@ class GINOLitModule(BaseLitModule):
         self.log(f"{split}/loss", u_vel_loss.mean(), **kwargs_log)
         self.log(f"{split}/u_loss_grid", u_vel_loss.mean(), **kwargs_log)
 
-        # self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
-        # self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log)  # v
-        # if "mse_pos" in position_loss:
-        #     self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
+        self.log(f"{split}/v_loss", position_loss["mse"].mean(), **kwargs_log)
+        self.log(f"{split}/loss_ekin", position_loss["e_kin"]["mse"].mean(), **kwargs_log)  # v
+        if "mse_pos" in position_loss:
+            self.log(f"{split}/mse_pos", position_loss["mse_pos"].mean(), **kwargs_log)
 
         self.metrics_dump[self.trajectory_idx] = loss
         self.trajectory_idx += 1
