@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=vel_solvers
-#SBATCH --output=slogs/vel_solvers_%A_%a.out
-#SBATCH --error=slogs/vel_solvers_%A_%a.err
+#SBATCH --output=logs/slogs/vel_solvers_%A_%a.out
+#SBATCH --error=logs/slogs/vel_solvers_%A_%a.err
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=2-00:00:00
@@ -11,7 +11,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
     echo "Warning: Running script outside of SLURM."
 else
   # If using Slurm: create logs directory if it doesn't exist already
-  mkdir -p slogs
+  mkdir -p logs/slogs
 fi
 
 # Ensure that 6 arguments are provided
