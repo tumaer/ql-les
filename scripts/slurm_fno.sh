@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=fno
-#SBATCH --output=slogs/fno_%A_%a.out
-#SBATCH --error=slogs/fno_%A_%a.out
+#SBATCH --output=logs/slogs/fno_%A_%a.out
+#SBATCH --error=logs/slogs/fno_%A_%a.out
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=2-00:00:00
@@ -12,7 +12,7 @@ if [ -z "$SLURM_JOB_ID" ]; then
 else
   # If using Slurm: create slogs directory if it doesn't exist already
   echo "Running on SLURM job ID: $SLURM_JOB_ID"
-  mkdir -p slogs
+  mkdir -p logs/slogs
 fi
 
 # Ensure that 3 arguments are provided

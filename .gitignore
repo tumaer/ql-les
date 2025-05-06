@@ -158,4 +158,3 @@ configs/local/default.yaml
 # Beyond the template
 *.DS_Store
 outputs/
-slogs/
