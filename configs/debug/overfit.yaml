@@ -23,7 +23,8 @@ trainer:
   max_steps: 200 # Train iters
 
 data:
-  shuffle: False
+  shuffle: True
+  limit_train_batches: ${vars.num_rollout_steps}
   data_dir: ${paths.data_dir}/2D_KOLM_Debug10
 
 vars:

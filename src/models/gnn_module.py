@@ -33,6 +33,7 @@ class GNNSimulator(BaseSimulator):
         device,
         alpha_u,
         vel_solver=None,
+        v2u_solver="none",
         isotropic_norm=False,
         **kwargs,  # model specific params
     ):
@@ -51,6 +52,7 @@ class GNNSimulator(BaseSimulator):
         self.vel_solver = vel_solver
         if alpha_u != 0:
             assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
+        self.v2u_solver = v2u_solver
 
         num_vs = input_seq_length - 1
         num_us = input_seq_length if alpha_u != 0 else 0
@@ -207,7 +209,8 @@ class GNNSimulator(BaseSimulator):
 
             most_recent_u_velocity = u_velocity[:, -1]
 
-            # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
+            # Update velocity and position, use an Euler integrator to go from acceleration to
+            # position, assuming dt = 1.
             if self.vel_solver == "simple":
                 new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
                 new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
@@ -265,7 +268,28 @@ class GNNSimulator(BaseSimulator):
                 )
 
             return new_position, new_u_velocity
+        elif self.v2u_solver != "none":
+            # Update velocity and position, use an Euler integrator to go from acceleration to
+            # position, assuming dt = 1.
+            if self.vel_solver == "simple":
+                new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
+            if self.v2u_solver == "same":
+                new_u_velocity = self._v2u(new_v_velocity)
+            elif self.v2u_solver == "gns":
+                raise NotImplementedError("v2u_solver=gns is not implemented yet.")
+
+            if self.neuralsph["num_steps"] > 0:
+                _, _, new_position = self._sph_rlx(
+                    new_position,
+                    kwargs["n_part_per_traj"],
+                    is_tvf=self.neuralsph["is_tvf"],
+                    dt_factor=self.neuralsph["dt_factor"],
+                    num_steps=self.neuralsph["num_steps"],
+                )
+
+            return new_position, new_u_velocity
         else:
             new_v_velocity = most_recent_v_velocity + v_acceleration
             new_position = self.shift_fn(most_recent_position, new_v_velocity)
@@ -306,6 +330,22 @@ class GNNSimulator(BaseSimulator):
                 n_part_per_traj=n_particles_per_trajectory,
             )
             return next_position, new_u_velocity
+        elif self.v2u_solver != "none":
+            u_velocity = kwargs["u_velocity"]
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                current_positions, n_particles_per_trajectory, particle_types, pbc
+            )
+            a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
+
+            if self.v2u_solver == "same":
+                next_position, new_u_velocity = self._decoder_postprocessor(
+                    a_v_pred,
+                    current_positions,
+                    pbc,
+                    n_part_per_traj=n_particles_per_trajectory,
+                )
+            return next_position, new_u_velocity
+
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(
                 current_positions, n_particles_per_trajectory, particle_types, pbc
@@ -356,6 +396,34 @@ class GNNSimulator(BaseSimulator):
             )
 
             return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
+        elif self.v2u_solver != "none":
+            u_velocity = kwargs["u_velocity"]
+            next_u_velocity = kwargs["next_u_velocity"]
+            node_features, edge_index, e_features = self._build_graph_from_raw(
+                noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc
+            )
+            a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
+
+            if self.v2u_solver == "same":
+                a_u_pred = torch.zeros_like(a_v_pred)
+
+                a_v_target, a_u_target = self._inverse_decoder_postprocessor(
+                    next_position_adjusted,
+                    noisy_position_sequence,
+                    pbc,
+                    next_u_velocity=next_u_velocity,
+                    u_velocity=u_velocity,
+                    n_part_per_traj=n_particles_per_trajectory,
+                )
+                return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
+            elif self.v2u_solver == "gns":
+                # TODO: implement second GNN for v2u
+                raise NotImplementedError("v2u_solver=gns is not implemented yet.")
+
+                # copy and stop gradients
+                a_u_pred = a_v_pred.clone().detach()
+                a_u_pred.requires_grad = False
+
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(
                 noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc
@@ -377,7 +445,7 @@ class GNNSimulator(BaseSimulator):
         previous_v_velocity = self.displ_fn(previous_position, position_sequence[:, -2])
         next_v_velocity = self.displ_fn(next_position, previous_position)
 
-        if self.alpha_u != 0:
+        if self.alpha_u != 0 or self.v2u_solver != "none":
             next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
             previous_u_velocity = kwargs["u_velocity"][:, -1]
 
@@ -545,6 +613,7 @@ class GNNLitModule(BaseLitModule):
         alpha_v: float = 1.0,
         active_metrics: Dict[str, Any] = None,
         metric_space: Dict[str, str] = "norm",
+        v2u_solver: str = "none",
     ) -> None:
         """Initialize the GNS model's LightningModule.
 
@@ -570,20 +639,24 @@ class GNNLitModule(BaseLitModule):
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
 
-        if (alpha_u != 0.0) and ("KOLM" not in self.net._case):
+        if (alpha_u != 0.0 or v2u_solver != "none") and ("KOLM" not in self.net._case):
             raise NotImplementedError(
-                "Alpha_u > 0.0 is only implemented for the Kolmogorov dataset."
+                "Alpha_u > 0.0 and v2u_solver != 'none' are only implemented for Kolmogorov."
             )
         # Push forward configuration
         self.seed = seed
         self.pushforward = pushforward
-        if (self.pushforward is not None) and (self.alpha_u != 0.0):
+        if (self.pushforward is not None) and (self.alpha_u != 0.0 or v2u_solver != "none"):
             raise NotImplementedError(
                 "Pushforward is only implemented for alpha_u = 0.0, i.e. LagrangeBench setting."
             )
 
         # Number of eval steps
         self.vel_solver = vel_solver
+        if v2u_solver != "none":
+            assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
+            assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
+        self.v2u_solver = v2u_solver
 
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
         return self.net.predict_accelerations(**features)
@@ -621,7 +694,7 @@ class GNNLitModule(BaseLitModule):
         if self.pushforward is not None:
             features["normalization_stats"] = self.net.normalization_stats
             features["boundaries"] = self.net._boundaries
-        if self.alpha_u != 0.0:
+        if self.alpha_u != 0.0 or self.v2u_solver != "none":
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
 
@@ -635,7 +708,7 @@ class GNNLitModule(BaseLitModule):
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
             pred, target = self.forward(features)
 
-        if self.alpha_u != 0.0:
+        if self.alpha_u != 0.0 or self.v2u_solver != "none":
             # Split predictions and targets into a_u and a_v
             a_v_pred, a_u_pred = pred
             a_v_target, a_u_target = target
@@ -649,6 +722,8 @@ class GNNLitModule(BaseLitModule):
 
             # Weighted combined loss
             loss = self.alpha_v * loss_v + self.alpha_u * loss_u
+
+            # TODO: add optional further models/losses for v2u_solver
         else:
             # Calculate loss
             loss = particle_mse(pred, target, non_kinematic_mask)
@@ -672,12 +747,13 @@ class GNNLitModule(BaseLitModule):
             active_metrics=self.active_metrics,
             vis_config=self.visualize[f"vis_{split}"],
             trajectory_idx=self.trajectory_idx,
-            u_vel=True if self.alpha_u != 0.0 else False,
+            u_vel=True if (self.alpha_u != 0.0 or self.v2u_solver != "none") else False,
             metric_space=self.metric_space.test if is_test else self.metric_space.val,
+            interpolate=self.metrics_interpolate,
         )
 
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
-        if self.alpha_u != 0.0:
+        if self.alpha_u != 0.0 or self.v2u_solver != "none":
             position_loss, u_vel_loss = loss
             self.log(
                 f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log

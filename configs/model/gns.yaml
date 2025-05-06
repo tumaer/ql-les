@@ -17,6 +17,7 @@ net:
   dataset_path: ${data.data_dir} # Path to the dataset
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
+  v2u_solver: ${model.v2u_solver}
   isotropic_norm: false
   # kwargs
   mlp_num_layers: 1
@@ -26,7 +27,7 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: 1e-3
+  lr: 1e-4
   weight_decay: 1.e-8
 
 # # Scheduler configuration
@@ -39,13 +40,19 @@ optimizer:
 #   warmup_epochs: 0
 #   max_epochs: 10
 
+# scheduler:
+#   _target_: src.utils.schedulers.ExpDecayLR
+#   _partial_: true
+#   init_value: ${..optimizer.lr}
+#   transition_steps: 250_000
+#   decay_rate: 0.1
+#   end_value: 1.0e-6
+
 scheduler:
-  _target_: src.utils.schedulers.ExpDecayLR
+  _target_: torch.optim.lr_scheduler.StepLR
   _partial_: true
-  init_value: ${..optimizer.lr}
-  transition_steps: 250_000
-  decay_rate: 0.1
-  end_value: 1.0e-6
+  step_size: 100_000
+  gamma: 0.5
 
 # Set whether to compile the model
 compile: true
@@ -74,13 +81,21 @@ active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
   val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
+  interpolate:
+    condition: radius # "radius", "knn"  # TODO: compare runtime against knn with k=3
+    k: 15
+    cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
+    kernel: "quintic" # "quintic", "xsqinv"
+
 alpha_u: 0.0
 alpha_v: 1.0
 
 visualize:
   vis_test:
     out_type: "none" # "none", "vtk", "pkl"
-    rollout_dir: "${paths.log_dir}/train/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
+    rollout_dir: "${paths.log_dir}/${task_name}/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
+    animate_first_n: 1
   vis_val:
     out_type: "none" # "none", "vtk", "pkl"
     rollout_dir: null
+    animate_first_n: 0

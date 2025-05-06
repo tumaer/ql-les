@@ -375,12 +375,12 @@ def write_rollout(
 
             # Create the figure and subplots
             fig, axes = plt.subplots(1, 2, figsize=(8, 4), layout="compressed")
-            scatter_pred = axes[0].scatter([], [], c=[], s=3, cmap="coolwarm", vmin=0, vmax=7)
-            scatter_gt = axes[1].scatter([], [], c=[], s=3, cmap="coolwarm", vmin=0, vmax=7)
+            scatter_pred = axes[0].scatter(0, 0, c=0, s=3, cmap="coolwarm", vmin=0, vmax=7)
+            scatter_gt = axes[1].scatter(0, 0, c=0, s=3, cmap="coolwarm", vmin=0, vmax=7)
             cbar = fig.colorbar(
                 scatter_pred, ax=axes, orientation="vertical", fraction=0.02, pad=0.05
             )
-            cbar.set_label("Velocity magnitude")
+            cbar.set_label(r"$\mathbf{u}$ magnitude")
             axes[0].set_title("Predicted Rollout")
             axes[1].set_title("Ground Truth Rollout")
             frame_text = fig.text(0.46, 0.95, "Frame:", ha="center", va="center", fontsize=12)

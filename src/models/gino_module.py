@@ -11,7 +11,7 @@ from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
 from src.utils.nbrs_utils import gen_grid_points
-from src.utils.interpolate import Interpolator, GridInterpolator
+from src.utils.interpolate import Interpolator
 
 
 class InterpFNO(nn.Module):
@@ -246,17 +246,6 @@ class GINOLitModule(BaseLitModule):
         )
 
         self.loss_fn = loss_fn
-
-        self.metrics_interpolate = GridInterpolator(
-            is_periodic=any(self.net._pbc),
-            domain_size=[x[1] for x in self.net._boundaries],
-            dim=self.net.dim,
-            dx=self.net.metadata["dx"],
-            condition=metric_space.interpolate["condition"],
-            k=metric_space.interpolate["k"],
-            cutoff_factor=metric_space.interpolate["cutoff_factor"],
-            kernel=metric_space.interpolate["kernel"],
-        )
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Remove `_metadata` key from the checkpoint.

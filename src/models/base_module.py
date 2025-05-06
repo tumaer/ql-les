@@ -10,9 +10,10 @@ import torch.nn as nn
 from lightning import LightningModule
 from torch import Tensor
 
-from src.utils.data_utils import load_metadata
-from src.utils.nbrs_utils import shift_fn, displ_fn
 from src.models.components.sph import relax_wrapper
+from src.utils.data_utils import load_metadata
+from src.utils.interpolate import GridInterpolator
+from src.utils.nbrs_utils import shift_fn, displ_fn
 
 
 class BaseSimulator(nn.Module):
@@ -206,6 +207,17 @@ class BaseLitModule(LightningModule):
         self.metric_space = metric_space
         self.visualize = visualize
         self.trajectory_idx = 0
+
+        self.metrics_interpolate = GridInterpolator(
+            is_periodic=any(self.net._pbc),
+            domain_size=[x[1] for x in self.net._boundaries],
+            dim=self.net.dim,
+            dx=self.net.metadata["dx"],
+            condition=metric_space.interpolate["condition"],
+            k=metric_space.interpolate["k"],
+            cutoff_factor=metric_space.interpolate["cutoff_factor"],
+            kernel=metric_space.interpolate["kernel"],
+        )
 
     def model_step(self):
         """Batch in, loss out."""

@@ -84,7 +84,7 @@ metric_space:
 visualize:
   vis_test:
     out_type: "none" # "none", "vtk", "pkl"
-    rollout_dir: "${paths.log_dir}/train/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
+    rollout_dir: "${paths.log_dir}/${task_name}/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
     animate_first_n: 1
   vis_val:
     out_type: "none" # "none", "vtk", "pkl"
