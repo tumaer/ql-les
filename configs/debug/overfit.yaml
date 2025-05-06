@@ -25,7 +25,7 @@ trainer:
 data:
   shuffle: True
   limit_train_batches: ${vars.num_rollout_steps}
-  data_dir: ${paths.data_dir}/2D_KOLM_Debug10
+  overfit: True
 
 vars:
   num_rollout_steps: 1 # STEPS

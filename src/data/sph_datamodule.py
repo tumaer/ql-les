@@ -20,6 +20,7 @@ class SPHDataModule(LightningDataModule):
         pin_memory: bool = False,
         shuffle: bool = True,
         limit_train_batches: Optional[float] = None,
+        overfit: bool = False,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -32,6 +33,7 @@ class SPHDataModule(LightningDataModule):
         self.pin_memory = pin_memory
         self.shuffle = shuffle
         self.limit_train_batches = limit_train_batches
+        self.overfit = overfit
 
         self.train_dataset = None
         self.val_dataset = None
@@ -57,7 +59,7 @@ class SPHDataModule(LightningDataModule):
                 indices = list(range(limited_len))
                 self.train_dataset = Subset(self.train_dataset, indices)
             self.val_dataset = H5Dataset(
-                split="valid",
+                split="valid" if not self.overfit else "train",
                 dataset_path=self.data_dir,
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
@@ -65,7 +67,7 @@ class SPHDataModule(LightningDataModule):
             )
         elif stage == "test":
             self.test_dataset = H5Dataset(
-                split="test",
+                split="test" if not self.overfit else "train",
                 dataset_path=self.data_dir,
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
