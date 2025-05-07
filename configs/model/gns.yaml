@@ -29,14 +29,14 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: 3e-4 # 1e-4 performs almost same as 3e-4. 3e-4 might be a problem to overfit
+  lr: 1e-4 # 1e-4 performs almost same as 3e-4. 3e-4 might be a problem to overfit
   weight_decay: 1.e-8
 
 #Scheduler configuration
 scheduler:
   _target_: torch.optim.lr_scheduler.StepLR
   _partial_: true
-  step_size: 100_000
+  step_size: 200_000
   gamma: 0.5
 
 # Set whether to compile the model

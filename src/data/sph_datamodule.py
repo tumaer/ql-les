@@ -53,6 +53,7 @@ class SPHDataModule(LightningDataModule):
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_pushforward_steps,
                 nl_backend=self.nl_backend,
+                regime="train",
             )
             if self.limit_train_batches is not None:
                 limited_len = self.batch_size * self.limit_train_batches
@@ -64,6 +65,7 @@ class SPHDataModule(LightningDataModule):
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
                 nl_backend=self.nl_backend,
+                regime="inference",
             )
         elif stage == "test":
             self.test_dataset = H5Dataset(
@@ -72,6 +74,7 @@ class SPHDataModule(LightningDataModule):
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
                 nl_backend=self.nl_backend,
+                regime="inference",
             )
         else:
             raise ValueError(f"Stage {stage} not recognized.")
