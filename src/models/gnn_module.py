@@ -15,6 +15,7 @@ from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
 from src.utils.nbrs_utils import nearest
+from src.utils.interpolate import Interpolator
 
 
 class GNNSimulator(BaseSimulator):
@@ -100,6 +101,18 @@ class GNNSimulator(BaseSimulator):
             )
         else:
             raise Warning(f"Model name {model_name} not recognized.")
+
+        if v2u_solver == "smooth":
+            self.v2u_smoothen = Interpolator(
+                is_periodic=any(self._pbc),
+                domain_size=[x[1] for x in self._boundaries],
+                dim=self.dim,
+                dx=self.metadata["dx"],
+                condition=kwargs["v2u_smooth"]["condition"],
+                k=kwargs["v2u_smooth"]["k"],
+                cutoff_factor=kwargs["v2u_smooth"]["cutoff_factor"],
+                kernel=kwargs["v2u_smooth"]["kernel"],
+            )
 
     def _build_graph_from_raw(
         self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
@@ -277,6 +290,9 @@ class GNNSimulator(BaseSimulator):
 
             if self.v2u_solver == "same":
                 new_u_velocity = self._v2u(new_v_velocity)
+            elif self.v2u_solver == "smooth":
+                new_u_velocity = self._v2u(new_v_velocity)
+                new_u_velocity = self.v2u_smoothen(new_position, new_position, new_u_velocity)
             elif self.v2u_solver == "gns":
                 raise NotImplementedError("v2u_solver=gns is not implemented yet.")
 
@@ -337,13 +353,14 @@ class GNNSimulator(BaseSimulator):
             )
             a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
 
-            if self.v2u_solver == "same":
+            if self.v2u_solver in ["same", "smooth"]:
                 next_position, new_u_velocity = self._decoder_postprocessor(
                     a_v_pred,
                     current_positions,
                     pbc,
                     n_part_per_traj=n_particles_per_trajectory,
                 )
+
             return next_position, new_u_velocity
 
         else:
@@ -404,7 +421,7 @@ class GNNSimulator(BaseSimulator):
             )
             a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
 
-            if self.v2u_solver == "same":
+            if self.v2u_solver in ["same", "smooth"]:
                 a_u_pred = torch.zeros_like(a_v_pred)
 
                 a_v_target, a_u_target = self._inverse_decoder_postprocessor(
@@ -755,9 +772,13 @@ class GNNLitModule(BaseLitModule):
         kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         if self.alpha_u != 0.0 or self.v2u_solver != "none":
             position_loss, u_vel_loss = loss
-            self.log(
-                f"{split}/loss", position_loss["mse"].mean() + u_vel_loss.mean(), **kwargs_log
-            )
+            if self.v2u_solver in ["same", "smooth"]:
+                # these methods do not have trainable parameters toward improving u.
+                # thus, u should not be used in early stopping criterium.
+                _loss = position_loss["mse"].mean()
+            else:
+                _loss = position_loss["mse"] + u_vel_loss.mean()
+            self.log(f"{split}/loss", _loss, **kwargs_log)
             self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
         else:
             position_loss = loss

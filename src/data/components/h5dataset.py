@@ -58,6 +58,7 @@ class H5Dataset(Dataset):
         input_seq_length: int = 6,
         extra_seq_length: int = 0,
         nl_backend: str = "matscipy",
+        regime: str = "train",
     ):
         """Initialize the dataset. If the dataset is not present, it is downloaded.
 
@@ -74,6 +75,7 @@ class H5Dataset(Dataset):
                 unroll steps. During validation/testing, this specifies the largest
                 N-step MSE loss we are interested in, e.g. for best model checkpointing.
             nl_backend: Which backend to use for the neighbor list
+            regime: [train|inference] - used to determine the dataset slicing
         """
 
         dataset_path = osp.normpath(dataset_path)  # remove potential trailing slash
@@ -123,7 +125,7 @@ class H5Dataset(Dataset):
             # (num_steps, num_particles, dim) = f["00000/position"].shape
             self.sequence_length = f["00000/position"].shape[0]
 
-        if split == "train":
+        if regime == "train":
             # During training, the first input_seq_length steps can only be used as
             # input, and the last one to compute the target acceleration. If we use
             # pushforward, then we need to provide extra_seq_length more steps
