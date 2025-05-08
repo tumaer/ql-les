@@ -154,7 +154,6 @@ class LLES(nn.Module):
 
         D = a_v.shape[1]
         direction = edge_directions.view(-1, 2, D)  # [n_edges, 2, D]
-
         # Project predicted acceleration along directions
         a_v_proj = (a_v.view(-1, 2, 1) * direction).sum(dim=1)
         a_u_proj = (a_u.view(-1, 2, 1) * direction).sum(dim=1)

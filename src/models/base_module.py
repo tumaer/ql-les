@@ -207,6 +207,13 @@ class BaseLitModule(LightningModule):
         self.metric_space = metric_space
         self.visualize = visualize
         self.trajectory_idx = 0
+        
+        # Determine dx: either from metadata or computed from grid resolution
+        if "grid_res" in metric_space.interpolate:
+            grid_res = metric_space.interpolate["grid_res"]
+            dx = self.net._boundaries[0][1] / grid_res
+        else:
+            dx = self.net.metadata["dx"]
 
         # Determine dx: either from metadata or computed from grid resolution
         if "grid_res" in metric_space.interpolate:
