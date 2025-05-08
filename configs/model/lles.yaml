@@ -1,3 +1,4 @@
+
 # configs/model/gns.yaml
 
 # Specify the correct path to the SimulatorLitModule in the Lightning module
@@ -7,27 +8,36 @@ net:
   # Specify the correct path to the GNS model implementation (GNNSimulator) within the SimulatorLitModule
   _target_: src.models.gnn_module.GNNSimulator # Adjust this to the actual path for your GNS simulator model
   _partial_: true
-  model_name: "gns"
+  model_name: "lles"
   input_seq_length: ${vars.input_seq_length}
-  latent_dim: 128
-  num_message_passing_steps: 10
-  noise_std: 3.0e-4
-  num_particle_types: 9
-  particle_type_embedding_size: 16
   dataset_path: ${data.data_dir} # Path to the dataset
+  noise_std: 3.0e-4
+
+  # GNS specific parameters, not needed for LLES
+  latent_dim: null
+  num_message_passing_steps: null
+  num_particle_types: null # Set to None for no particle type embedding
+  particle_type_embedding_size: null
+
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
-  v2u_solver: ${model.v2u_solver}
   isotropic_norm: false
   # kwargs
-  mlp_num_layers: 1
-  mlp_hidden_dim: 128
+  input_features: 3
+  hidden_dims: [20, 100, 20]
+  output_dim: 4
+  activation: "tanh" # tanh, relu, sigmoid
 
-# Optimizer configuration
+#Loss coefficients
+alpha_u: 1.0
+alpha_v: 1.0
+alpha_field: 1.0
+
+#Optimizer configuration
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: 1e-4
+  lr: 3e-7
   weight_decay: 1.e-8
 
 #Scheduler configuration
@@ -59,28 +69,23 @@ neuralsph:
     dt_factor: 1
     num_steps: 0
 
-v2u_solver: none
-
 num_rollout_steps: ${vars.num_rollout_steps}
 active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
   val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
-  interpolate:
-    condition: radius # "radius", "knn"  # TODO: compare runtime against knn with k=3
-    k: 15
-    cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
+  interpolate: 
+    condition: "radius" # "radius", "knn"
+    k: 15 # number of neighbors for knn
+    cutoff_factor: 3.0 # for radius
     kernel: "quintic" # "quintic", "xsqinv"
+    # grid_res: 32 # grid resolution for interpolation
 
-alpha_u: 0.0
-alpha_v: 1.0
-
+#Visualization settings
 visualize:
   vis_test:
     out_type: "none" # "none", "vtk", "pkl"
-    rollout_dir: "${paths.log_dir}/${task_name}/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
-    animate_first_n: 1
+    rollout_dir: "${paths.log_dir}/train/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
   vis_val:
     out_type: "none" # "none", "vtk", "pkl"
     rollout_dir: null
-    animate_first_n: 0

@@ -9,10 +9,11 @@ from src.models.components.gns import (
     EncodeProcessDecode,
     time_diff,
 )
+from src.models.components.lles import LLES
 from src.models.components.segnn import SEGNN, WeightBalancedIrreps, Irreps
 from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
-from src.utils.metrics import particle_mse
+from src.utils.metrics import particle_mse, field_mse
 from src.utils.eval_utils import eval_rollout
 from src.utils.nbrs_utils import nearest
 
@@ -45,9 +46,10 @@ class GNNSimulator(BaseSimulator):
             dataset_path=dataset_path,
         )
         self._num_particle_types = num_particle_types
-        self._particle_type_embedding = nn.Embedding(
-            num_particle_types, particle_type_embedding_size
-        )  # (9, 16)
+        if model_name != "lles":
+            self._particle_type_embedding = nn.Embedding(
+                num_particle_types, particle_type_embedding_size
+            )  # (9, 16)
         self.alpha_u = alpha_u
         self.vel_solver = vel_solver
         if alpha_u != 0:
@@ -98,6 +100,14 @@ class GNNSimulator(BaseSimulator):
                 norm=kwargs["norm"],  # None, "batch", "instance"
                 additional_message_irreps=additional_message_irreps,  # 2x0e
             )
+        elif model_name == "lles":
+            self._encode_process_decode = LLES(
+                input_features=kwargs["input_features"],
+                hidden_dims=kwargs["hidden_dims"],
+                output_dim=kwargs["output_dim"],
+                activation=kwargs["activation"],
+                metadata = self.metadata
+            )  
         else:
             raise Warning(f"Model name {model_name} not recognized.")
 
@@ -310,6 +320,32 @@ class GNNSimulator(BaseSimulator):
         """Predict the next position using GNS. Used for rollout."""
         if pbc:
             current_positions = current_positions % self._boundaries
+        if self.model_name == "lles":
+            u_velocity = kwargs["u_velocity"]
+            interpolate_params = {"condition": kwargs["interpolate"].condition, "k": kwargs["interpolate"].k}
+            
+            senders, receivers, edge_features, edge_directions = self._build_lles_graph(
+                current_positions,
+                u_velocity,
+                n_particles_per_trajectory,
+                pbc,
+                interpolate_params=interpolate_params
+            )
+            #Get predicted accelerations
+            a_v_pred, a_u_pred = self._encode_process_decode(edge_features, edge_directions, 
+                                                             art_visc_h=self._connectivity_radius, 
+                                                             senders=senders)
+            
+            next_position, new_u_velocity = self._decoder_postprocessor(
+                a_v_pred,
+                current_positions,
+                pbc,
+                a_u_pred=a_u_pred,
+                u_velocity=u_velocity,
+                n_part_per_traj=n_particles_per_trajectory,
+            )
+
+            return next_position, new_u_velocity
 
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
@@ -373,6 +409,45 @@ class GNNSimulator(BaseSimulator):
         next_position = next_position.squeeze(1)
         noisy_position_sequence = self.shift_fn(position_sequence, position_sequence_noise)
         next_position_adjusted = self.shift_fn(next_position, position_sequence_noise[:, -1])
+        
+        if self.model_name == "lles":
+            u_velocity = kwargs["u_velocity"]
+            next_u_velocity = kwargs["next_u_velocity"]
+            interpolate= kwargs["interpolate"]
+            interpolate_params = kwargs["interpolate_params"]
+            
+            senders, receivers, edge_features, edge_directions = self._build_lles_graph(
+                noisy_position_sequence,
+                u_velocity,
+                n_particles_per_trajectory,
+                pbc,
+                interpolate_params=interpolate_params
+            )
+            #Get predicted accelerations
+            #debug scale
+            normalized_pred_a_v, normalized_pred_a_u = self._encode_process_decode(edge_features, edge_directions, 
+                                                             art_visc_h=self._connectivity_radius, 
+                                                             senders=senders)
+            
+            #Compute target accelerations
+            target_a_v, target_a_u = self._inverse_decoder_postprocessor(
+                next_position_adjusted, noisy_position_sequence, pbc, 
+                next_u_velocity=next_u_velocity, u_velocity=u_velocity,
+                n_part_per_traj=n_particles_per_trajectory
+            )
+            
+            #Integrate predicted accelerations to get positions
+            pred_positions, pred_velocities = self._integrate_accelerations(
+                a_v_pred=normalized_pred_a_v, position_sequence=position_sequence, pbc=pbc, 
+                a_u_pred=normalized_pred_a_u, u_velocity=kwargs["u_velocity"])
+
+            #Pred field
+            u_field_pred = interpolate(r=pred_positions, f=pred_velocities, npptr=n_particles_per_trajectory)
+            
+            #Target field
+            u_field_gt = interpolate(r=next_position_adjusted, f=next_u_velocity.squeeze(1), npptr=n_particles_per_trajectory)
+
+            return (normalized_pred_a_v, normalized_pred_a_u, u_field_gt), (target_a_v, target_a_u, u_field_pred)
 
         # Compute the target normalized acceleration
         if self.alpha_u != 0:
@@ -591,7 +666,85 @@ class GNNSimulator(BaseSimulator):
             v_acceleration = next_v_velocity - previous_v_velocity
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             return v_normalized_acceleration
+        
+    def _integrate_accelerations(self, a_v_pred, position_sequence, pbc=True, a_u_pred=None, u_velocity=None):
+        # The model produces the output in normalized space so we apply inverse normalization.
+        v_acceleration = self._denorm(a_v_pred, "va")
 
+        most_recent_position = position_sequence[:, -1]
+        most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
+
+        if self.alpha_u != 0:
+            u_acceleration = self._denorm(a_u_pred, "ua")
+
+            most_recent_u_velocity = u_velocity[:, -1]
+
+            # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
+            if self.vel_solver == "simple":
+                new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
+                new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+            elif self.vel_solver == "tvf":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+            elif self.vel_solver == "simple_u":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+
+            return new_position, new_u_velocity
+    
+    def _build_lles_graph(self, position_sequence, u_velocity, n_particles_per_trajectory, pbc, **kwargs):
+        """
+        Constructs edge indices and edge-level features for LLES.
+
+        Returns:
+            senders (LongTensor): Edge source indices
+            receivers (LongTensor): Edge destination indices
+            edge_features (Tensor): [n_edges, F] features like |r|, |v|, dot(r,v)
+            edge_directions (Tensor): [n_edges, 2D] concatenated normalized r̂ and v̂
+        """
+        EPS = 1e-6
+        interp = kwargs["interpolate_params"]
+
+        pos = position_sequence[:, -1]
+        vel = u_velocity[:, -1]
+
+        # Neighbor search
+        if interp["condition"] == "radius":
+            senders, receivers = nearest(pos, n_particles_per_trajectory, pbc, self._boundaries,
+                                        cutoff=self._connectivity_radius)
+        elif interp["condition"] == "knn":
+            senders, receivers = nearest(pos, n_particles_per_trajectory, pbc, self._boundaries,
+                                        k=interp["k"], condition="knn")
+        else:
+            raise ValueError("Invalid neighbor condition")
+
+        mask = senders != receivers
+        senders, receivers = senders[mask], receivers[mask]
+
+        # Relative displacements and velocities
+        r_ij = self.displ_fn(pos[senders], pos[receivers]) / self._connectivity_radius
+        v_ij = self._norm(vel[senders] - vel[receivers], key="uu")
+
+        # Compute norms and features
+        r_sq = torch.sum(r_ij ** 2, dim=1, keepdim=True)
+        v_sq = torch.sum(v_ij ** 2, dim=1, keepdim=True)
+        dot_rv = torch.sum(r_ij * v_ij, dim=1, keepdim=True)
+
+        edge_features = torch.cat([
+            torch.sqrt(r_sq),
+            torch.sqrt(v_sq),
+            dot_rv
+        ], dim=1)
+
+        edge_directions = torch.cat([
+            r_ij / torch.sqrt(r_sq + EPS),
+            v_ij / torch.sqrt(v_sq + EPS)
+        ], dim=1)
+
+        return senders, receivers, edge_features, edge_directions
 
 class GNNLitModule(BaseLitModule):
     """A LightningModule for training a Graph Network Simulator (GNS) model."""
@@ -611,6 +764,7 @@ class GNNLitModule(BaseLitModule):
         vel_solver: str = "simple",
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
+        alpha_field: float = 1.0,
         active_metrics: Dict[str, Any] = None,
         metric_space: Dict[str, str] = "norm",
         v2u_solver: str = "none",
@@ -638,6 +792,7 @@ class GNNLitModule(BaseLitModule):
         # Loss weights
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
+        self.alpha_field = alpha_field
 
         if (alpha_u != 0.0 or v2u_solver != "none") and ("KOLM" not in self.net._case):
             raise NotImplementedError(
@@ -657,7 +812,7 @@ class GNNLitModule(BaseLitModule):
             assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
             assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
         self.v2u_solver = v2u_solver
-
+        
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
         return self.net.predict_accelerations(**features)
 
@@ -690,6 +845,8 @@ class GNNLitModule(BaseLitModule):
             "particle_types": batch.particle_types,
             "pbc": any(self.net._pbc),
             "position_sequence_noise": position_sequence_noise,
+            "interpolate": self.metrics_interpolate,
+            "interpolate_params": self.metric_space.interpolate
         }
         if self.pushforward is not None:
             features["normalization_stats"] = self.net.normalization_stats
@@ -707,6 +864,45 @@ class GNNLitModule(BaseLitModule):
             # Forward pass
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
             pred, target = self.forward(features)
+        
+        if self.net.model_name == "lles":
+            # Unpack the predictions and targets
+            pred_a_v, pred_a_u, pred_field_u = pred
+            target_a_v, target_a_u, target_field_u = target
+            # Compute the loss for a_v and a_u
+            loss_v = particle_mse(pred_a_v, target_a_v, non_kinematic_mask)
+            loss_u = particle_mse(pred_a_u, target_a_u, non_kinematic_mask)
+            loss_field_u = field_mse(pred_field_u, target_field_u)
+            kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
+            self.log("train/loss_u", loss_u, **kwargs_log)
+            self.log("train/loss_v", loss_v, **kwargs_log)
+            self.log("train/loss_field_u", loss_field_u, **kwargs_log)
+
+            # Weighted combined loss
+            loss = self.alpha_v * loss_v + self.alpha_u * loss_u + self.alpha_field * loss_field_u
+            
+                        # Add gradient norm logging — only on step > 0
+            if self.global_step % 50 == 0 and self.global_step > 0:
+                total_norm = 0.0
+                for p in self.parameters():
+                    if p.grad is not None:
+                        total_norm += p.grad.detach().data.norm(2).item() ** 2
+                total_norm = total_norm ** 0.5
+                self.log("grad_norm", total_norm)
+                
+            self.log("pred_a_v_mean", pred_a_v.mean(), **kwargs_log)
+            self.log("pred_a_u_mean", pred_a_u.mean(), **kwargs_log)
+            self.log("pred_a_v_std", pred_a_v.std(), **kwargs_log)
+            self.log("pred_a_u_std", pred_a_u.std(), **kwargs_log)
+            
+                            
+            self.log("target_a_v_mean", target_a_v.mean(), **kwargs_log)
+            self.log("target_a_u_mean", target_a_u.mean(), **kwargs_log)
+            self.log("target_a_v_std", target_a_v.std(), **kwargs_log)
+            self.log("target_a_u_std", target_a_u.std(), **kwargs_log)
+            
+                    
+            return loss
 
         if self.alpha_u != 0.0 or self.v2u_solver != "none":
             # Split predictions and targets into a_u and a_v
