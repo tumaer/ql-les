@@ -136,7 +136,7 @@ def _nearest_batch(
             )
         elif condition == "knn":
             edge_index = knn_graph(x, k=k, batch=batch_ids, loop=add_self_edges)
-        # both `_graph` functions flip the order of senders/receivers. This matter in knn
+        # both `_graph` functions flip the order of senders/receivers. This matters in knn
         edge_index = torch.flip(edge_index, dims=[0])
     return edge_index
 
@@ -208,6 +208,9 @@ def _nearest_batch_pbc(
         mask = (edge_index[0] >= start) & (edge_index[0] < end)  # edge_index[0] is sorted
         local_idx = edge_index[1][mask] - start
         edge_index[1][mask] = (local_idx % n_particles_per_trajectory[i]) + start
+
+    #Message passing layers expect source_to_target
+    edge_index = torch.flip(edge_index, dims=[0])
 
     return edge_index
 

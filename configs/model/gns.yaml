@@ -22,6 +22,7 @@ net:
   # kwargs
   mlp_num_layers: 1
   mlp_hidden_dim: 128
+  domain_decomp: false
 
 # Optimizer configuration
 optimizer:
@@ -70,7 +71,7 @@ metric_space:
     condition: radius # "radius", "knn"  # TODO: compare runtime against knn with k=3
     k: 15
     cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
-    kernel: "quintic" # "quintic", "xsqinv"
+    kernel: "xsqinv" # "quintic", "xsqinv"
 
 alpha_u: 0.0
 alpha_v: 1.0

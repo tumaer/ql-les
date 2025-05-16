@@ -69,6 +69,7 @@ class GNNSimulator(BaseSimulator):
                 mlp_num_layers=kwargs["mlp_num_layers"],
                 mlp_hidden_dim=kwargs["mlp_hidden_dim"],
                 alpha_u=alpha_u,
+                domain_decomp = kwargs["domain_decomp"]
             )
         elif model_name == "segnn":
             input_irreps = Irreps(
