@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - override /model: v2u_gnn
+  - override /data: kolm2d_every1
+  - override /trainer: gpu
+  - override /vars: default
+  - override /callbacks: default
+  - override /logger: wandb
+
+tags: ["kolm", "gns"]
+
+logger:
+  wandb:
+    project: "v2u_gnn_kolm2d_every1"
+
+seed: 12345
+
+data:
+  num_workers: 2
+
+vars:
+  num_rollout_steps: 1

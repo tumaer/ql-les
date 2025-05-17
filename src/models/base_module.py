@@ -13,7 +13,8 @@ from torch import Tensor
 from src.models.components.sph import relax_wrapper
 from src.utils.data_utils import load_metadata
 from src.utils.interpolate import GridInterpolator
-from src.utils.nbrs_utils import shift_fn, displ_fn
+from src.utils.nbrs_utils import shift_fn, displ_fn, nearest
+from src.models.components.gns import time_diff
 
 
 class BaseSimulator(nn.Module):
@@ -172,6 +173,98 @@ class BaseSimulator(nn.Module):
         # pressure term std: 53; viscous term std: 0.059; tvf std: 90
         return self._sph_fn(r, n_part_per_traj, u)
 
+    def _build_graph_from_raw(
+        self,
+        position_sequence,
+        n_particles_per_trajectory,
+        particle_types=None,
+        pbc=True,
+        node_features_type=None,
+        connectivity_on_nth_to_last=-1,  # no reason to touch this in normal use
+        **kwargs,
+    ):
+        device = position_sequence.device
+        n_total_points = position_sequence.shape[0]
+        most_recent_position = position_sequence[:, -1]  # (n_nodes, 2)
+
+        # senders and receivers are integers of shape (E,)
+
+        senders, receivers = nearest(
+            position_sequence[:, connectivity_on_nth_to_last],
+            n_particles_per_trajectory,
+            pbc,
+            self._boundaries,
+            cutoff=self._connectivity_radius,
+        )
+
+        batch_ids = torch.cat(
+            [
+                torch.LongTensor([i for _ in range(n)])
+                for i, n in enumerate(n_particles_per_trajectory)
+            ]
+        ).to(device)
+        node_features = {"batch_ids": batch_ids}
+
+        if node_features_type is None:
+            node_features_type = self.node_features_type
+
+        if "v" in node_features_type:
+            v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
+            # Normalized velocity sequence, merging spatial an time axis.
+            v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
+            v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
+            node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
+
+        if "u" in node_features_type:
+            u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
+            u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
+            u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
+            node_features["u_flat_velocity_sequence"] = u_flat_velocity_sequence
+
+        # Normalized clipped distances to lower and upper boundaries, if not PBC.
+        if not pbc:
+            # Normalized clipped distances to lower and upper boundaries.
+            # boundaries are an array of shape [num_dimensions, 2], where the second
+            # axis, provides the lower/upper bofundaries.
+            boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(device)
+            distance_to_lower_boundary = most_recent_position - boundaries[:, 0][None]
+            distance_to_upper_boundary = boundaries[:, 1][None] - most_recent_position
+            distance_to_boundaries = torch.cat(
+                [distance_to_lower_boundary, distance_to_upper_boundary], dim=1
+            )
+            normalized_clipped_distance_to_boundaries = torch.clamp(
+                distance_to_boundaries / self._connectivity_radius, -1.0, 1.0
+            )
+            node_features["normalized_clipped_distance_to_boundaries"] = (
+                normalized_clipped_distance_to_boundaries
+            )
+
+        if self._num_particle_types > 1:
+            particle_type_embeddings = self._particle_type_embedding(particle_types)
+            node_features["particle_type_embeddings"] = particle_type_embeddings
+
+        # Collect edge features.
+        edge_features = {}
+
+        # Relative displacement and distances normalized to radius
+        # (E, 2)
+        # normalized_relative_displacements = (
+        #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
+        # ) / self._connectivity_radius
+        normalized_relative_displacements = self.displ_fn(
+            most_recent_position[senders, :], most_recent_position[receivers, :]
+        )
+
+        normalized_relative_displacements /= self._connectivity_radius
+        edge_features["normalized_relative_displacements"] = normalized_relative_displacements
+
+        normalized_relative_distances = torch.norm(
+            normalized_relative_displacements, dim=-1, keepdim=True
+        )
+        edge_features["normalized_relative_distances"] = normalized_relative_distances
+
+        return node_features, torch.stack([senders, receivers]), edge_features
+
     def forward(self):
         """Forward pass of the model."""
         pass
@@ -208,16 +301,17 @@ class BaseLitModule(LightningModule):
         self.visualize = visualize
         self.trajectory_idx = 0
 
-        self.metrics_interpolate = GridInterpolator(
-            is_periodic=any(self.net._pbc),
-            domain_size=[x[1] for x in self.net._boundaries],
-            dim=self.net.dim,
-            dx=self.net.metadata["dx"],
-            condition=metric_space.interpolate["condition"],
-            k=metric_space.interpolate["k"],
-            cutoff_factor=metric_space.interpolate["cutoff_factor"],
-            kernel=metric_space.interpolate["kernel"],
-        )
+        if metric_space is not None:
+            self.metrics_interpolate = GridInterpolator(
+                is_periodic=any(self.net._pbc),
+                domain_size=[x[1] for x in self.net._boundaries],
+                dim=self.net.dim,
+                dx=self.net.metadata["dx"],
+                condition=metric_space.interpolate["condition"],
+                k=metric_space.interpolate["k"],
+                cutoff_factor=metric_space.interpolate["cutoff_factor"],
+                kernel=metric_space.interpolate["kernel"],
+            )
 
     def model_step(self):
         """Batch in, loss out."""

@@ -1,21 +1,23 @@
 # src.models.gns_module.py
+import os
 from typing import Any, Dict, Tuple
 
 import torch
-from torch import Tensor
 import torch.nn as nn
+from omegaconf import OmegaConf
+from torch import Tensor
+
 from src.models.components.gns import (
     get_random_walk_noise_for_position_sequence,
     EncodeProcessDecode,
-    time_diff,
 )
 from src.models.components.segnn import SEGNN, WeightBalancedIrreps, Irreps
 from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
-from src.utils.nbrs_utils import nearest
 from src.utils.interpolate import Interpolator
+from src.models.v2u_module import V2USimulator
 
 
 class GNNSimulator(BaseSimulator):
@@ -36,6 +38,7 @@ class GNNSimulator(BaseSimulator):
         vel_solver=None,
         v2u_solver="none",
         isotropic_norm=False,
+        node_features_type=["u"],
         **kwargs,  # model specific params
     ):
         super().__init__(
@@ -45,15 +48,21 @@ class GNNSimulator(BaseSimulator):
             noise_std=noise_std,
             dataset_path=dataset_path,
         )
+
+        if alpha_u != 0:
+            assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
+        if v2u_solver != "none":
+            assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
+            assert alpha_u == 0, "v2u_solver is only implemented for alpha_u = 0."
+
         self._num_particle_types = num_particle_types
         self._particle_type_embedding = nn.Embedding(
             num_particle_types, particle_type_embedding_size
         )  # (9, 16)
         self.alpha_u = alpha_u
         self.vel_solver = vel_solver
-        if alpha_u != 0:
-            assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
         self.v2u_solver = v2u_solver
+        self.node_features_type = node_features_type
 
         num_vs = input_seq_length - 1
         num_us = input_seq_length if alpha_u != 0 else 0
@@ -113,87 +122,32 @@ class GNNSimulator(BaseSimulator):
                 cutoff_factor=kwargs["v2u_smooth"]["cutoff_factor"],
                 kernel=kwargs["v2u_smooth"]["kernel"],
             )
-
-    def _build_graph_from_raw(
-        self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
-    ):
-        device = position_sequence.device
-        n_total_points = position_sequence.shape[0]
-        most_recent_position = position_sequence[:, -1]  # (n_nodes, 2)
-        v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
-
-        # senders and receivers are integers of shape (E,)
-
-        senders, receivers = nearest(
-            most_recent_position,
-            n_particles_per_trajectory,
-            pbc,
-            self._boundaries,
-            cutoff=self._connectivity_radius,
-        )
-
-        batch_ids = torch.cat(
-            [
-                torch.LongTensor([i for _ in range(n)])
-                for i, n in enumerate(n_particles_per_trajectory)
-            ]
-        ).to(device)
-        node_features = {"batch_ids": batch_ids}
-
-        # Normalized velocity sequence, merging spatial an time axis.
-        v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
-        v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
-        node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
-
-        if self.alpha_u != 0:
-            u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
-            u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
-            u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
-            node_features["u_flat_velocity_sequence"] = u_flat_velocity_sequence
-
-        # Normalized clipped distances to lower and upper boundaries, if not PBC.
-        if not pbc:
-            # Normalized clipped distances to lower and upper boundaries.
-            # boundaries are an array of shape [num_dimensions, 2], where the second
-            # axis, provides the lower/upper bofundaries.
-            boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(device)
-            distance_to_lower_boundary = most_recent_position - boundaries[:, 0][None]
-            distance_to_upper_boundary = boundaries[:, 1][None] - most_recent_position
-            distance_to_boundaries = torch.cat(
-                [distance_to_lower_boundary, distance_to_upper_boundary], dim=1
-            )
-            normalized_clipped_distance_to_boundaries = torch.clamp(
-                distance_to_boundaries / self._connectivity_radius, -1.0, 1.0
-            )
-            node_features["normalized_clipped_distance_to_boundaries"] = (
-                normalized_clipped_distance_to_boundaries
+        elif v2u_solver == "gnn":
+            assert "v2u_gnn" in kwargs, "v2u_gnn must be specified for v2u_solver=gnn."
+            assert "ckpt_path" in kwargs["v2u_gnn"], (
+                "ckpt_path must be provided for v2u_solver=gnn."
             )
 
-        if self._num_particle_types > 1:
-            particle_type_embeddings = self._particle_type_embedding(particle_types)
-            node_features["particle_type_embeddings"] = particle_type_embeddings
+            # Get config from ckpt_path
+            gnn_ckpt_root = os.path.dirname(os.path.dirname(kwargs["v2u_gnn"]["ckpt_path"]))
+            gnn_cfg = OmegaConf.load(os.path.join(gnn_ckpt_root, ".hydra", "config.yaml"))
+            gnn_cfg_net = gnn_cfg.model.net
 
-        # Collect edge features.
-        edge_features = {}
+            # remove hydra-specific keys
+            gnn_cfg_net.pop("_target_", None)
+            gnn_cfg_net.pop("_partial_", None)
+            # Instantiate the model using the configuration
+            self.v2u_gnn = V2USimulator(device=device, **gnn_cfg_net).to(device)
 
-        # Relative displacement and distances normalized to radius
-        # (E, 2)
-        # normalized_relative_displacements = (
-        #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
-        # ) / self._connectivity_radius
-        normalized_relative_displacements = self.displ_fn(
-            most_recent_position[senders, :], most_recent_position[receivers, :]
-        )
-
-        normalized_relative_displacements /= self._connectivity_radius
-        edge_features["normalized_relative_displacements"] = normalized_relative_displacements
-
-        normalized_relative_distances = torch.norm(
-            normalized_relative_displacements, dim=-1, keepdim=True
-        )
-        edge_features["normalized_relative_distances"] = normalized_relative_distances
-
-        return node_features, torch.stack([senders, receivers]), edge_features
+            # Load the checkpoint
+            checkpoint = torch.load(kwargs["v2u_gnn"]["ckpt_path"], map_location=device)
+            # Adjust state_dict keys to remove extra hierarchy
+            adjusted_state_dict = {
+                k.replace("net._orig_mod.", ""): v for k, v in checkpoint["state_dict"].items()
+            }
+            # print(adjusted_state_dict["v2u_gnn._encoder.node_fn.0.0.weight"].device)
+            self.v2u_gnn.load_state_dict(adjusted_state_dict, strict=False)
+            # print(self.v2u_gnn.v2u_gnn._encoder.node_fn[0][0].weight.device)
 
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
         """
@@ -287,14 +241,10 @@ class GNNSimulator(BaseSimulator):
             if self.vel_solver == "simple":
                 new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
+            else:
+                raise NotImplementedError("v2u_solver is not implemented for vel_solver!=simple.")
 
-            if self.v2u_solver == "same":
-                new_u_velocity = self._v2u(new_v_velocity)
-            elif self.v2u_solver == "smooth":
-                new_u_velocity = self._v2u(new_v_velocity)
-                new_u_velocity = self.v2u_smoothen(new_position, new_position, new_u_velocity)
-            elif self.v2u_solver == "gns":
-                raise NotImplementedError("v2u_solver=gns is not implemented yet.")
+            new_u_velocity = self._v2u_step(new_v_velocity, most_recent_position)
 
             if self.neuralsph["num_steps"] > 0:
                 _, _, new_position = self._sph_rlx(
@@ -319,6 +269,20 @@ class GNNSimulator(BaseSimulator):
                     num_steps=self.neuralsph["num_steps"],
                 )
         return new_position
+
+    def _v2u_step(self, v_velocity, position):
+        """Predict u velocity from v velocity using the v2u solver."""
+        if self.v2u_solver == "same":
+            u_velocity = self._v2u(v_velocity)
+        elif self.v2u_solver == "smooth":
+            u_velocity = self._v2u(v_velocity)
+            u_velocity = self.v2u_smoothen(position, position, u_velocity)
+        elif self.v2u_solver == "gnn":
+            u_velocity = v_velocity  # this is implemented in `self.predict_positions`
+        else:
+            raise NotImplementedError(f"v2u_solver {self.v2u_solver} not implemented.")
+
+        return u_velocity
 
     def predict_positions(
         self, current_positions, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
@@ -349,7 +313,11 @@ class GNNSimulator(BaseSimulator):
         elif self.v2u_solver != "none":
             u_velocity = kwargs["u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(
-                current_positions, n_particles_per_trajectory, particle_types, pbc
+                current_positions,
+                n_particles_per_trajectory,
+                particle_types,
+                pbc,
+                node_features_type=["v"],
             )
             a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
 
@@ -360,6 +328,25 @@ class GNNSimulator(BaseSimulator):
                     pbc,
                     n_part_per_traj=n_particles_per_trajectory,
                 )
+
+            if self.v2u_solver == "gnn":
+                next_position, new_v_velocity = self._decoder_postprocessor(
+                    a_v_pred,
+                    current_positions,
+                    pbc,
+                    n_part_per_traj=n_particles_per_trajectory,
+                    node_features_type=[],
+                )
+                # build graph consisting only of the newly predicted v velocities
+                node_features.pop("particle_type_embeddings", None)
+                node_features["v_flat_velocity_sequence"] = self._norm(new_v_velocity, "vv")
+
+                # run gnn
+                # print(self.v2u_gnn.v2u_gnn._encoder.node_fn[0][0].weight.device)
+                a_u_pred = self.v2u_gnn.v2u_gnn(node_features, edge_index, e_features)
+                u_acceleration = a_u_pred / 5  # TODO: remove manual normalization
+                # u := v + u_acceleration
+                new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
 
             return next_position, new_u_velocity
 
@@ -422,8 +409,6 @@ class GNNSimulator(BaseSimulator):
             a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
 
             if self.v2u_solver in ["same", "smooth"]:
-                a_u_pred = torch.zeros_like(a_v_pred)
-
                 a_v_target, a_u_target = self._inverse_decoder_postprocessor(
                     next_position_adjusted,
                     noisy_position_sequence,
@@ -432,15 +417,15 @@ class GNNSimulator(BaseSimulator):
                     u_velocity=u_velocity,
                     n_part_per_traj=n_particles_per_trajectory,
                 )
-                return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
-            elif self.v2u_solver == "gns":
-                # TODO: implement second GNN for v2u
-                raise NotImplementedError("v2u_solver=gns is not implemented yet.")
 
-                # copy and stop gradients
-                a_u_pred = a_v_pred.clone().detach()
-                a_u_pred.requires_grad = False
-
+                zeros = torch.zeros_like(a_v_pred)
+                return (a_v_pred, zeros), (a_v_target, a_u_target)
+            elif self.v2u_solver == "gnn":
+                # training of both _encode_process_decode and v2u_gnn
+                raise ValueError(
+                    "Both GNNs for v2u_solver=gnn have to be trained beforehand. Use one of "
+                    "v2u_solver={same,smooth} for the v-GNN, and then v2u_module.py"
+                )
         else:
             node_features, edge_index, e_features = self._build_graph_from_raw(
                 noisy_position_sequence, n_particles_per_trajectory, particle_types, pbc
@@ -656,10 +641,19 @@ class GNNLitModule(BaseLitModule):
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
 
+        # How to formulate the learning problem
+        if alpha_u != 0:
+            assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
+        if v2u_solver != "none":
+            assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
+            assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
         if (alpha_u != 0.0 or v2u_solver != "none") and ("KOLM" not in self.net._case):
             raise NotImplementedError(
                 "Alpha_u > 0.0 and v2u_solver != 'none' are only implemented for Kolmogorov."
             )
+        self.vel_solver = vel_solver
+        self.v2u_solver = v2u_solver
+
         # Push forward configuration
         self.seed = seed
         self.pushforward = pushforward
@@ -667,13 +661,6 @@ class GNNLitModule(BaseLitModule):
             raise NotImplementedError(
                 "Pushforward is only implemented for alpha_u = 0.0, i.e. LagrangeBench setting."
             )
-
-        # Number of eval steps
-        self.vel_solver = vel_solver
-        if v2u_solver != "none":
-            assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
-            assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
-        self.v2u_solver = v2u_solver
 
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
         return self.net.predict_accelerations(**features)
@@ -776,8 +763,8 @@ class GNNLitModule(BaseLitModule):
                 # these methods do not have trainable parameters toward improving u.
                 # thus, u should not be used in early stopping criterium.
                 _loss = position_loss["mse"].mean()
-            else:
-                _loss = position_loss["mse"] + u_vel_loss.mean()
+            elif self.v2u_solver == "gnn":
+                _loss = position_loss["mse"].mean() + u_vel_loss.mean()
             self.log(f"{split}/loss", _loss, **kwargs_log)
             self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)
         else:

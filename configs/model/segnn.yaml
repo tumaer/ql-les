@@ -18,6 +18,7 @@ net:
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
   isotropic_norm: false
+  node_features_type: ["v"] # ["v", "u", "type"]
   # kwargs
   lmax_attr: 1
   lmax_hidden: 1

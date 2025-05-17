@@ -19,6 +19,7 @@ net:
   vel_solver: ${model.vel_solver}
   v2u_solver: ${model.v2u_solver}
   isotropic_norm: false
+  node_features_type: ["v"] # ["v", "u", "type"]
   # kwargs
   mlp_num_layers: 1
   mlp_hidden_dim: 128
