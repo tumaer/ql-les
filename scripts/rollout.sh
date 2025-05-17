@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=rollout
-#SBATCH --output=logs/%x.log
-#SBATCH --error=logs/%x.log
+#SBATCH --output=logs/slogs/%x.log
+#SBATCH --error=logs/slogs/%x.log
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
@@ -20,10 +20,12 @@ NSPH_SUFFIX=$2
 if [ "$EVERY_N" -eq 1 ]; then # every1
     rlt_len=200 # 1000
     ckpts=(
-        "2025-02-24_01-35-42"  # simple
-        "2025-02-24_01-36-13"  # tvf
-        "2025-02-24_02-06-00"  # simple_u
-        "2025-02-24_02-43-05"  # simple_rlx
+        # "2025-02-24_01-35-42"  # simple
+        # "2025-02-24_01-36-13"  # tvf
+        # "2025-02-24_02-06-00"  # simple_u
+        # "2025-02-24_02-43-05"  # simple_rlx
+        # "2025-05-05_04-52-59"  # GINO
+        # "2025-05-05_02-40-18"  # InterpFNO
     )
 elif [ "$EVERY_N" -eq 10 ]; then # every10
     rlt_len=20 # 100
@@ -42,10 +44,10 @@ run_base() {
     python src/eval.py \
         ckpt_path="logs/train/runs/${ckpt}/checkpoints/last.ckpt" \
         vars.num_rollout_steps=${rlt_len} \
-        model.visualize.vis_test.rollout_dir="logs/train/runs/${ckpt}/rollouts_${rlt_len}${NSPH_SUFFIX}" \
+        model.visualize.vis_test.rollout_dir="logs/train/runs/${ckpt}/rlt/${rlt_len}${NSPH_SUFFIX}" \
+        trainer.limit_test_batches=1 \
+        model.visualize.vis_test.out_type=vtk \
         logger.wandb.offline=True "$@"
-        # trainer.limit_test_batches=1 \
-        # model.visualize.vis_test.out_type=pkl \
 }
 
 if [ -z "$NSPH_SUFFIX" ]; then  # no NeuralSPH
@@ -70,5 +72,5 @@ fi
 # nohup bash scripts/rollout.sh 1 "" >> logs/rollouts_50_1.log 2>&1 &
 
 # equivalently:
-# sbatch -J rollouts_50_1 scripts/rollout.sh 1 ""
-# sbatch -J rollouts_5_10 scripts/rollout.sh 10 ""
+# sbatch -J rollouts_200_1 scripts/rollout.sh 1 ""
+# sbatch -J rollouts_20_10 scripts/rollout.sh 10 ""

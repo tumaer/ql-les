@@ -11,7 +11,7 @@ net:
   input_seq_length: ${vars.input_seq_length}
   latent_dim: 128
   num_message_passing_steps: 10
-  noise_std: 3.0e-4
+  noise_std: 0.0
   num_particle_types: 9
   particle_type_embedding_size: 16
   dataset_path: ${data.data_dir} # Path to the dataset
