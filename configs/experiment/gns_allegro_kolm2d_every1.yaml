@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - override /model: gns
-  - override /data: kolm2d_every10
+  - override /data: kolm2d_every1
   - override /trainer: gpu
   - override /vars: kolm2d
   - override /callbacks: default

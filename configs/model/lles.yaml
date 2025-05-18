@@ -78,7 +78,7 @@ metric_space:
     condition: "radius" # "radius", "knn"
     k: 15 # number of neighbors for knn
     cutoff_factor: 3.0 # for radius
-    kernel: "quintic" # "quintic", "xsqinv"
+    kernel: "xsqinv" # "quintic", "xsqinv"
     # grid_res: 32 # grid resolution for interpolation
 
 #Visualization settings
