@@ -1,4 +1,3 @@
-
 # configs/model/gns.yaml
 
 # Specify the correct path to the SimulatorLitModule in the Lightning module
@@ -74,7 +73,7 @@ active_metrics: ["mse", "e_kin", "mse_pos"]
 metric_space:
   val: "norm" # {"phys", "norm", "diff"} = physical, normalized, difference
   test: "phys"
-  interpolate: 
+  interpolate:
     condition: "radius" # "radius", "knn"
     k: 15 # number of neighbors for knn
     cutoff_factor: 3.0 # for radius

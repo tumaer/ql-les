@@ -209,7 +209,7 @@ def _nearest_batch_pbc(
         local_idx = edge_index[1][mask] - start
         edge_index[1][mask] = (local_idx % n_particles_per_trajectory[i]) + start
 
-    #Message passing layers expect source_to_target
+    # Message passing layers expect source_to_target
     edge_index = torch.flip(edge_index, dims=[0])
 
     return edge_index

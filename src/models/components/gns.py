@@ -58,6 +58,8 @@ def get_random_walk_noise_for_position_sequence(
     )
 
     return position_sequence_noise
+
+
 class Encoder(nn.Module):
     """Encoder module for the graph neural network."""
 
@@ -85,10 +87,13 @@ class Encoder(nn.Module):
         )
 
     def forward(self, x, edge_index, e_features):  # global_features
+        """Encoder forward pass."""
         # x: (E, node_in)
         # edge_index: (2, E)
         # e_features: (E, edge_in)
         return self.node_fn(x), self.edge_fn(e_features)
+
+
 class InteractionNetwork(MessagePassing):
     """Interaction network module for the graph neural network."""
 
@@ -122,6 +127,7 @@ class InteractionNetwork(MessagePassing):
         )
 
     def forward(self, x, edge_index, e_features):
+        """Interaction network forward pass."""
         # x: (E, node_in)
         # edge_index: (2, E)
         # e_features: (E, edge_in)
@@ -131,16 +137,20 @@ class InteractionNetwork(MessagePassing):
         return x + x_residual, e_features + e_features_residual
 
     def message(self, edge_index, x_i, x_j, e_features):
+        """Message function for the interaction network."""
         e_features = torch.cat([x_i, x_j, e_features], dim=-1)
         e_features = self.edge_fn(e_features)
         return e_features
 
     def update(self, x_updated, x, e_features):
+        """Update function for the interaction network."""
         # x_updated: (E, edge_out)
         # x: (E, node_in)
         x_updated = torch.cat([x_updated, x], dim=-1)
         x_updated = self.node_fn(x_updated)
         return x_updated, e_features
+
+
 class Processor(MessagePassing):
     """Processor module for the graph neural network."""
 
@@ -170,9 +180,12 @@ class Processor(MessagePassing):
         )
 
     def forward(self, x, edge_index, e_features):
+        """Processor forward pass."""
         for gnn in self.gnn_stacks:
             x, e_features = gnn(x, edge_index, e_features)
         return x, e_features
+
+
 class ZeroLevelAggregation(MessagePassing):
     """Interaction network module for the graph neural network with zero-level aggregation."""
 
@@ -206,31 +219,40 @@ class ZeroLevelAggregation(MessagePassing):
         )
 
     def forward(self, x_0, x_t, edge_index, e_features):
+        """Zero-level aggregation forward pass."""
         x_residual = x_t
         e_features_residual = e_features
         x_t, e_features = self.propagate(edge_index, x_0, x_t, e_features)
         return x_t + x_residual, e_features + e_features_residual
+
     def propagate(self, edge_index, x_0, x_t, e_features, size=None):
-        #Message
+        """Propagate messages through the graph."""
+        # Message
         out, x_i_index = self.message(x_0, edge_index, e_features)
 
-        #Aggregation
+        # Aggregation
         out = self.aggregate(out, index=x_i_index, ptr=None, dim_size=x_0.shape[0])
-        
-        #Node update
+
+        # Node update
         x_updated = torch.cat([out, x_t], dim=-1)
         x_updated = self.node_fn(x_updated)
         return x_updated, e_features
 
     def message(self, x_0, edge_index, e_features, flow="source_to_target"):
-        i, j = (1, 0) if flow == 'source_to_target' else (0, 1)
+        """Message function for the zero-level aggregation."""
+        i, j = (1, 0) if flow == "source_to_target" else (0, 1)
         x_i = x_0[edge_index[i]]
         x_j = x_0[edge_index[j]]
         e_features = torch.cat([x_i, x_j, e_features], dim=-1)
         e_features = self.edge_fn(e_features)
         return e_features, edge_index[i]
+
+
 class DomainDecompositionProcessor(nn.Module):
-    def __init__(self,
+    """Domain decomposition processor module for the Allegro-style neural network."""
+
+    def __init__(
+        self,
         node_in,
         node_out,
         edge_in,
@@ -252,14 +274,17 @@ class DomainDecompositionProcessor(nn.Module):
                 )
                 for _ in range(num_interaction_steps)
             ]
-        )   
-        
+        )
+
     def forward(self, x, edge_index, e_features):
+        """Domain decomposition processor forward pass."""
         x_0 = x
         x_t = x
         for gnn in self.gnn_stacks:
             x_t, e_features = gnn(x_0, x_t, edge_index, e_features)
         return x, e_features
+
+
 class Decoder(nn.Module):
     """Decoder module for the graph neural network."""
 
@@ -293,7 +318,7 @@ class EncodeProcessDecode(nn.Module):
         mlp_num_layers,
         mlp_hidden_dim,
         alpha_u,
-        domain_decomp
+        domain_decomp,
     ):
         super(EncodeProcessDecode, self).__init__()
         self._encoder = Encoder(
@@ -324,7 +349,7 @@ class EncodeProcessDecode(nn.Module):
                 mlp_num_layers=mlp_num_layers,
                 mlp_hidden_dim=mlp_hidden_dim,
             )
-            
+
         self._decoder = Decoder(
             node_in=latent_dim,
             node_out=node_out,

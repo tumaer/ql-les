@@ -129,6 +129,7 @@ def particle_mse(pred, target, non_kinematic_mask):
     loss = loss.sum() / num_non_kinematic
     return loss
 
+
 def field_mse(pred, target):
     """
     Compute the mean squared error for a field.
@@ -143,6 +144,7 @@ def field_mse(pred, target):
     loss = (pred - target) ** 2
     loss = loss.sum()
     return loss
+
 
 def compute_kinetic_energy(
     predictions: torch.Tensor,
