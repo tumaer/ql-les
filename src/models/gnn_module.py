@@ -130,7 +130,6 @@ class GNNSimulator(BaseSimulator):
     def _build_graph_from_raw(
         self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
     ):
-
         """
         Build a graph from raw data, including node and edge features.
 
@@ -733,7 +732,7 @@ class GNNSimulator(BaseSimulator):
             v_acceleration = next_v_velocity - previous_v_velocity
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             return v_normalized_acceleration
-        
+
     def _integrate_accelerations(
         self, a_v_pred, position_sequence, pbc=True, a_u_pred=None, u_velocity=None
     ):
@@ -843,8 +842,6 @@ class GNNLitModule(BaseLitModule):
             assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
             assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
         self.v2u_solver = v2u_solver
-
-
 
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
         """Forward pass through the model."""
