@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - override /model: gns
-  - override /data: kolm2d_every1
+  - override /data: kolm2d_every1_debug
   - override /trainer: gpu
   - override /vars: kolm2d
   - override /callbacks: default
@@ -11,17 +11,24 @@ model:
   _target_: src.models.gnn_module.GNNLitModule
   net:
     noise_std: 0.0
-    domain_decomp: true # Disable message passing (Allegro-style: Musaelian et al. (2022), information propagation)
-    num_message_passing_steps: 5 # Number of interaction steps in this case
   pushforward: null
-  vel_solver: "simple" # "simple", "tvf", "neural_sph"
+  vel_solver: "tvf" # "simple", "tvf", "neural_sph"
   alpha_u: 1.0
   alpha_v: 1.0
+  neuralsph:
+    val:
+      is_tvf: True
+      dt_factor: 1
+      num_steps: 1
+    test:
+      is_tvf: False
+      dt_factor: 1
+      num_steps: 0
 
 tags: ["kolm", "gns"]
 
 logger:
   wandb:
-    project: "kolm2d_every10"
+    project: "kolm2d_every1"
 
 seed: 12345

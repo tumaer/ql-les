@@ -20,6 +20,7 @@ class XsqinvKernel:
         return res
 
 
+# TODO: review, because returns 0s and NaNs
 class QuinticKernel:
     """The quintic kernel function of Morris."""
 

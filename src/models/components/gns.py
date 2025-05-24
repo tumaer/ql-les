@@ -60,6 +60,8 @@ def get_random_walk_noise_for_position_sequence(
     return position_sequence_noise
 
 
+
+
 class Encoder(nn.Module):
     """Encoder module for the graph neural network."""
 
@@ -87,11 +89,13 @@ class Encoder(nn.Module):
         )
 
     def forward(self, x, edge_index, e_features):  # global_features
-        """Encoder forward pass."""
+        """Encodes the node and edge features."""
         # x: (E, node_in)
         # edge_index: (2, E)
         # e_features: (E, edge_in)
         return self.node_fn(x), self.edge_fn(e_features)
+
+
 
 
 class InteractionNetwork(MessagePassing):
@@ -127,7 +131,7 @@ class InteractionNetwork(MessagePassing):
         )
 
     def forward(self, x, edge_index, e_features):
-        """Interaction network forward pass."""
+        """Forward pass of the interaction network."""
         # x: (E, node_in)
         # edge_index: (2, E)
         # e_features: (E, edge_in)
@@ -137,18 +141,20 @@ class InteractionNetwork(MessagePassing):
         return x + x_residual, e_features + e_features_residual
 
     def message(self, edge_index, x_i, x_j, e_features):
-        """Message function for the interaction network."""
+        """Message construction for the interaction network."""
         e_features = torch.cat([x_i, x_j, e_features], dim=-1)
         e_features = self.edge_fn(e_features)
         return e_features
 
     def update(self, x_updated, x, e_features):
-        """Update function for the interaction network."""
+        """Node update for the interaction network."""
         # x_updated: (E, edge_out)
         # x: (E, node_in)
         x_updated = torch.cat([x_updated, x], dim=-1)
         x_updated = self.node_fn(x_updated)
         return x_updated, e_features
+
+
 
 
 class Processor(MessagePassing):
@@ -180,10 +186,12 @@ class Processor(MessagePassing):
         )
 
     def forward(self, x, edge_index, e_features):
-        """Processor forward pass."""
+        """Forward pass of the processor."""
         for gnn in self.gnn_stacks:
             x, e_features = gnn(x, edge_index, e_features)
         return x, e_features
+
+
 
 
 class ZeroLevelAggregation(MessagePassing):
@@ -219,38 +227,40 @@ class ZeroLevelAggregation(MessagePassing):
         )
 
     def forward(self, x_0, x_t, edge_index, e_features):
-        """Zero-level aggregation forward pass."""
+        """Forward pass of the zero-level aggregation network."""
         x_residual = x_t
         e_features_residual = e_features
         x_t, e_features = self.propagate(edge_index, x_0, x_t, e_features)
         return x_t + x_residual, e_features + e_features_residual
 
+
     def propagate(self, edge_index, x_0, x_t, e_features, size=None):
-        """Propagate messages through the graph."""
+        """Propagates the interaction (message) through the graph."""
         # Message
-        out, x_i_index = self.message(x_0, edge_index, e_features)
+        out, x_i_index = self.message(x_0, x_t, edge_index, e_features)
 
         # Aggregation
+        # Aggregation
         out = self.aggregate(out, index=x_i_index, ptr=None, dim_size=x_0.shape[0])
+
+        # Node update
 
         # Node update
         x_updated = torch.cat([out, x_t], dim=-1)
         x_updated = self.node_fn(x_updated)
         return x_updated, e_features
 
-    def message(self, x_0, edge_index, e_features, flow="source_to_target"):
-        """Message function for the zero-level aggregation."""
+    def message(self, x_0, x_t, edge_index, e_features, flow="source_to_target"):
+        """Pseudo-message construction for the zero-level aggregation network."""
         i, j = (1, 0) if flow == "source_to_target" else (0, 1)
-        x_i = x_0[edge_index[i]]
+        x_i = x_t[edge_index[i]]
         x_j = x_0[edge_index[j]]
         e_features = torch.cat([x_i, x_j, e_features], dim=-1)
         e_features = self.edge_fn(e_features)
         return e_features, edge_index[i]
 
 
-class DomainDecompositionProcessor(nn.Module):
-    """Domain decomposition processor module for the Allegro-style neural network."""
-
+class LocalProcessor(nn.Module):
     def __init__(
         self,
         node_in,
@@ -261,7 +271,7 @@ class DomainDecompositionProcessor(nn.Module):
         mlp_num_layers,
         mlp_hidden_dim,
     ):
-        super(DomainDecompositionProcessor, self).__init__()
+        super(LocalProcessor, self).__init__()
         self.gnn_stacks = nn.ModuleList(
             [
                 ZeroLevelAggregation(
@@ -277,12 +287,13 @@ class DomainDecompositionProcessor(nn.Module):
         )
 
     def forward(self, x, edge_index, e_features):
-        """Domain decomposition processor forward pass."""
-        x_0 = x
-        x_t = x
+        """Forward pass of the local processor."""
+        x_0, x_t = x, x
         for gnn in self.gnn_stacks:
             x_t, e_features = gnn(x_0, x_t, edge_index, e_features)
         return x, e_features
+
+
 
 
 class Decoder(nn.Module):
@@ -301,6 +312,7 @@ class Decoder(nn.Module):
         )
 
     def forward(self, x):
+        """Decodes the features."""
         # x: (E, node_in)
         return self.node_fn(x)
 
@@ -318,7 +330,7 @@ class EncodeProcessDecode(nn.Module):
         mlp_num_layers,
         mlp_hidden_dim,
         alpha_u,
-        domain_decomp,
+        local_interaction=False,
     ):
         super(EncodeProcessDecode, self).__init__()
         self._encoder = Encoder(
@@ -329,7 +341,7 @@ class EncodeProcessDecode(nn.Module):
             mlp_num_layers=mlp_num_layers,
             mlp_hidden_dim=mlp_hidden_dim,
         )
-        if not domain_decomp:
+        if not local_interaction:
             self._processor = Processor(
                 node_in=latent_dim,
                 node_out=latent_dim,
@@ -340,7 +352,7 @@ class EncodeProcessDecode(nn.Module):
                 mlp_hidden_dim=mlp_hidden_dim,
             )
         else:
-            self._processor = DomainDecompositionProcessor(
+            self._processor = LocalProcessor(
                 node_in=latent_dim,
                 node_out=latent_dim,
                 edge_in=latent_dim,
@@ -349,6 +361,7 @@ class EncodeProcessDecode(nn.Module):
                 mlp_num_layers=mlp_num_layers,
                 mlp_hidden_dim=mlp_hidden_dim,
             )
+
 
         self._decoder = Decoder(
             node_in=latent_dim,
@@ -359,6 +372,7 @@ class EncodeProcessDecode(nn.Module):
         self.alpha_u = alpha_u
 
     def _transform(self, x, edge_index, e_features):
+        """Transforms the input data into the required format for the GNS."""
         node_features = [
             x[k]
             for k in [  # define a fixed order for the node features
@@ -382,6 +396,7 @@ class EncodeProcessDecode(nn.Module):
         return torch.cat(node_features, dim=-1), edge_index, torch.cat(edge_features, dim=-1)
 
     def forward(self, x, edge_index, e_features):
+        """Forward pass of the GNS."""
         # x: (E, node_in)
         x, edge_index, e_features = self._transform(x, edge_index, e_features)
         x, e_features = self._encoder(x, edge_index, e_features)
@@ -392,3 +407,4 @@ class EncodeProcessDecode(nn.Module):
             return a_v, a_u
         else:
             return x
+

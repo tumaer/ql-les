@@ -16,13 +16,14 @@ net:
   particle_type_embedding_size: 16
   dataset_path: ${data.data_dir} # Path to the dataset
   alpha_u: ${model.alpha_u}
+  alpha_field: ${model.alpha_field}
   vel_solver: ${model.vel_solver}
   v2u_solver: ${model.v2u_solver}
   isotropic_norm: false
   # kwargs
   mlp_num_layers: 1
   mlp_hidden_dim: 128
-  domain_decomp: false
+  local_interaction: false
 
 # Optimizer configuration
 optimizer:
@@ -71,10 +72,11 @@ metric_space:
     condition: radius # "radius", "knn"  # TODO: compare runtime against knn with k=3
     k: 15
     cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
-    kernel: "xsqinv" # "quintic", "xsqinv"
+    kernel: "quintic" # "quintic", "xsqinv"
 
 alpha_u: 0.0
 alpha_v: 1.0
+alpha_field: 0.0
 
 visualize:
   vis_test:
