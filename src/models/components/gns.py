@@ -60,8 +60,6 @@ def get_random_walk_noise_for_position_sequence(
     return position_sequence_noise
 
 
-
-
 class Encoder(nn.Module):
     """Encoder module for the graph neural network."""
 
@@ -94,8 +92,6 @@ class Encoder(nn.Module):
         # edge_index: (2, E)
         # e_features: (E, edge_in)
         return self.node_fn(x), self.edge_fn(e_features)
-
-
 
 
 class InteractionNetwork(MessagePassing):
@@ -155,8 +151,6 @@ class InteractionNetwork(MessagePassing):
         return x_updated, e_features
 
 
-
-
 class Processor(MessagePassing):
     """Processor module for the graph neural network."""
 
@@ -190,8 +184,6 @@ class Processor(MessagePassing):
         for gnn in self.gnn_stacks:
             x, e_features = gnn(x, edge_index, e_features)
         return x, e_features
-
-
 
 
 class ZeroLevelAggregation(MessagePassing):
@@ -232,7 +224,6 @@ class ZeroLevelAggregation(MessagePassing):
         e_features_residual = e_features
         x_t, e_features = self.propagate(edge_index, x_0, x_t, e_features)
         return x_t + x_residual, e_features + e_features_residual
-
 
     def propagate(self, edge_index, x_0, x_t, e_features, size=None):
         """Propagates the interaction (message) through the graph."""
@@ -292,8 +283,6 @@ class LocalProcessor(nn.Module):
         for gnn in self.gnn_stacks:
             x_t, e_features = gnn(x_0, x_t, edge_index, e_features)
         return x, e_features
-
-
 
 
 class Decoder(nn.Module):
@@ -362,7 +351,6 @@ class EncodeProcessDecode(nn.Module):
                 mlp_hidden_dim=mlp_hidden_dim,
             )
 
-
         self._decoder = Decoder(
             node_in=latent_dim,
             node_out=node_out,
@@ -407,4 +395,3 @@ class EncodeProcessDecode(nn.Module):
             return a_v, a_u
         else:
             return x
-
