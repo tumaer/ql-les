@@ -178,6 +178,7 @@ def eval_single_rollout(
                 particle_types=features["particle_types"],
                 pbc=pbc,
                 u_velocity=current_u_velocity,
+                interpolate=interpolate,
                 x_grid=x_grid,
             )
             assert isinstance(out, tuple), "Output from simulator should be a tuple."

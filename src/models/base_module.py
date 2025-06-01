@@ -208,11 +208,25 @@ class BaseLitModule(LightningModule):
         self.visualize = visualize
         self.trajectory_idx = 0
 
+        # Determine dx: either from metadata or computed from grid resolution
+        if "grid_res" in metric_space.interpolate:
+            grid_res = metric_space.interpolate["grid_res"]
+            dx = self.net._boundaries[0][1] / grid_res
+        else:
+            dx = self.net.metadata["dx"]
+
+        # Determine dx: either from metadata or computed from grid resolution
+        if "grid_res" in metric_space.interpolate:
+            grid_res = metric_space.interpolate["grid_res"]
+            dx = self.net._boundaries[0][1] / grid_res
+        else:
+            dx = self.net.metadata["dx"]
+
         self.metrics_interpolate = GridInterpolator(
             is_periodic=any(self.net._pbc),
             domain_size=[x[1] for x in self.net._boundaries],
             dim=self.net.dim,
-            dx=self.net.metadata["dx"],
+            dx=dx,
             condition=metric_space.interpolate["condition"],
             k=metric_space.interpolate["k"],
             cutoff_factor=metric_space.interpolate["cutoff_factor"],

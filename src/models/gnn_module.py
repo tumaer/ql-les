@@ -9,6 +9,7 @@ from src.models.components.gns import (
     EncodeProcessDecode,
     time_diff,
 )
+from src.models.components.lles import LLES
 from src.models.components.segnn import SEGNN, WeightBalancedIrreps, Irreps
 from src.models.base_module import BaseSimulator, BaseLitModule
 from src.utils.train_utils import pushforward_sample_steps, pushforward_fn
@@ -33,6 +34,7 @@ class GNNSimulator(BaseSimulator):
         particle_type_embedding_size,
         device,
         alpha_u,
+        alpha_field,
         vel_solver=None,
         v2u_solver="none",
         isotropic_norm=False,
@@ -46,10 +48,12 @@ class GNNSimulator(BaseSimulator):
             dataset_path=dataset_path,
         )
         self._num_particle_types = num_particle_types
-        self._particle_type_embedding = nn.Embedding(
-            num_particle_types, particle_type_embedding_size
-        )  # (9, 16)
+        if model_name != "lles":
+            self._particle_type_embedding = nn.Embedding(
+                num_particle_types, particle_type_embedding_size
+            )  # (9, 16)
         self.alpha_u = alpha_u
+        self.alpha_field = alpha_field
         self.vel_solver = vel_solver
         if alpha_u != 0:
             assert vel_solver is not None, "vel_solver must be specified if alpha_u!=0."
@@ -68,6 +72,7 @@ class GNNSimulator(BaseSimulator):
                 mlp_num_layers=kwargs["mlp_num_layers"],
                 mlp_hidden_dim=kwargs["mlp_hidden_dim"],
                 alpha_u=alpha_u,
+                local_interaction=kwargs["local_interaction"],
             )
         elif model_name == "segnn":
             input_irreps = Irreps(
@@ -99,6 +104,14 @@ class GNNSimulator(BaseSimulator):
                 norm=kwargs["norm"],  # None, "batch", "instance"
                 additional_message_irreps=additional_message_irreps,  # 2x0e
             )
+        elif model_name == "lles":
+            self._encode_process_decode = LLES(
+                input_features=kwargs["input_features"],
+                hidden_dims=kwargs["hidden_dims"],
+                output_dim=kwargs["output_dim"],
+                activation=kwargs["activation"],
+                metadata=self.metadata,
+            )
         else:
             raise Warning(f"Model name {model_name} not recognized.")
 
@@ -117,20 +130,30 @@ class GNNSimulator(BaseSimulator):
     def _build_graph_from_raw(
         self, position_sequence, n_particles_per_trajectory, particle_types, pbc=True, **kwargs
     ):
+        """
+        Build a graph from raw data, including node and edge features.
+
+        Args:
+            position_sequence (Tensor): Sequence of positions.
+            n_particles_per_trajectory (Tensor): Number of particles per trajectory.
+            particle_types (Tensor): Particle types.
+            pbc (bool): Periodic boundary conditions. Defaults to True.
+
+        Raises:
+            ValueError: If the interpolation condition is not valid.
+
+        Returns:
+            Tuple[Dict[str, Tensor], Tensor, Dict[str, Tensor]]: Node features, edge index, and edge features.
+        """
         device = position_sequence.device
         n_total_points = position_sequence.shape[0]
-        most_recent_position = position_sequence[:, -1]  # (n_nodes, 2)
+        most_recent_position = position_sequence[:, -1]  # (N, D)
+
         v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
 
-        # senders and receivers are integers of shape (E,)
-
-        senders, receivers = nearest(
-            most_recent_position,
-            n_particles_per_trajectory,
-            pbc,
-            self._boundaries,
-            cutoff=self._connectivity_radius,
-        )
+        # Normalized velocity sequence, merging spatial an time axis.
+        v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
+        v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
 
         batch_ids = torch.cat(
             [
@@ -138,15 +161,13 @@ class GNNSimulator(BaseSimulator):
                 for i, n in enumerate(n_particles_per_trajectory)
             ]
         ).to(device)
-        node_features = {"batch_ids": batch_ids}
 
-        # Normalized velocity sequence, merging spatial an time axis.
-        v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
-        v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
-        node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
-
+        node_features = {
+            "batch_ids": batch_ids,
+            "v_flat_velocity_sequence": v_flat_velocity_sequence,
+        }
         if self.alpha_u != 0:
-            u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
+            u_velocity_sequence = kwargs["u_velocity"]
             u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
             u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
             node_features["u_flat_velocity_sequence"] = u_flat_velocity_sequence
@@ -170,30 +191,56 @@ class GNNSimulator(BaseSimulator):
             )
 
         if self._num_particle_types > 1:
-            particle_type_embeddings = self._particle_type_embedding(particle_types)
-            node_features["particle_type_embeddings"] = particle_type_embeddings
+            node_features["particle_type_embeddings"] = self._particle_type_embedding(
+                particle_types
+            )
 
-        # Collect edge features.
+        # --- Edge Construction ---
+        interp = kwargs.get("interpolate_params", {"condition": "radius"})
+        if interp["condition"] == "radius":
+            senders, receivers = nearest(
+                most_recent_position,
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                cutoff=self._connectivity_radius,
+            )
+        elif interp["condition"] == "knn":
+            senders, receivers = nearest(
+                most_recent_position,
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                k=interp["k"],
+                condition="knn",
+            )
+        else:
+            raise ValueError("Invalid neighbor condition")
+
         edge_features = {}
+        r_ij = self.displ_fn(most_recent_position[senders, :], most_recent_position[receivers, :])
+        r_ij /= self._connectivity_radius
+        edge_features["normalized_relative_displacements"] = r_ij
+        edge_features["normalized_relative_distances"] = torch.norm(r_ij, dim=1, keepdim=True)
 
-        # Relative displacement and distances normalized to radius
-        # (E, 2)
-        # normalized_relative_displacements = (
-        #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
-        # ) / self._connectivity_radius
-        normalized_relative_displacements = self.displ_fn(
-            most_recent_position[senders, :], most_recent_position[receivers, :]
-        )
+        if self.model_name == "lles":
+            EPS = 1e-6
+            most_recent_u_velocity = u_velocity_sequence[:, -1]
+            v_ij = self._norm(
+                most_recent_u_velocity[senders] - most_recent_u_velocity[receivers], key="uu"
+            )
+            r_sq = torch.sum(r_ij**2, dim=1, keepdim=True)
+            v_sq = torch.sum(v_ij**2, dim=1, keepdim=True)
+            dot_rv = torch.sum(r_ij * v_ij, dim=1, keepdim=True)
 
-        normalized_relative_displacements /= self._connectivity_radius
-        edge_features["normalized_relative_displacements"] = normalized_relative_displacements
+            edge_features = torch.cat([torch.sqrt(r_sq), torch.sqrt(v_sq), dot_rv], dim=1)
+            edge_directions = torch.cat(
+                [r_ij / torch.sqrt(r_sq + EPS), v_ij / torch.sqrt(v_sq + EPS)], dim=1
+            )
+            return senders, receivers, edge_features, edge_directions
 
-        normalized_relative_distances = torch.norm(
-            normalized_relative_displacements, dim=-1, keepdim=True
-        )
-        edge_features["normalized_relative_distances"] = normalized_relative_distances
-
-        return node_features, torch.stack([senders, receivers]), edge_features
+        edge_index = torch.stack([senders, receivers], dim=0)
+        return node_features, edge_index, edge_features
 
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
         """
@@ -329,14 +376,39 @@ class GNNSimulator(BaseSimulator):
 
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
-            node_features, edge_index, e_features = self._build_graph_from_raw(
-                current_positions,
-                n_particles_per_trajectory,
-                particle_types,
-                pbc,
-                u_velocity=u_velocity,
-            )
-            a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
+            if self.model_name == "lles":
+                interpolate_params = {
+                    "condition": kwargs["interpolate"].condition,
+                    "k": kwargs["interpolate"].k,
+                }
+
+                senders, receivers, edge_features, edge_directions = self._build_graph_from_raw(
+                    current_positions,
+                    n_particles_per_trajectory,
+                    particle_types,
+                    pbc,
+                    u_velocity=u_velocity,
+                    interpolate_params=interpolate_params,
+                )
+                # Get predicted accelerations
+                a_v_pred, a_u_pred = self._encode_process_decode(
+                    edge_features,
+                    edge_directions,
+                    art_visc_h=self._connectivity_radius,
+                    senders=senders,
+                )
+            else:
+                node_features, edge_index, e_features = self._build_graph_from_raw(
+                    current_positions,
+                    n_particles_per_trajectory,
+                    particle_types,
+                    pbc,
+                    u_velocity=u_velocity,
+                )
+                a_v_pred, a_u_pred = self._encode_process_decode(
+                    node_features, edge_index, e_features
+                )
+
             next_position, new_u_velocity = self._decoder_postprocessor(
                 a_v_pred,
                 current_positions,
@@ -395,14 +467,8 @@ class GNNSimulator(BaseSimulator):
         if self.alpha_u != 0:
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
-            node_features, edge_index, e_features = self._build_graph_from_raw(
-                noisy_position_sequence,
-                n_particles_per_trajectory,
-                particle_types,
-                pbc,
-                u_velocity=u_velocity,
-            )
-            a_v_pred, a_u_pred = self._encode_process_decode(node_features, edge_index, e_features)
+
+            # Compute target accelerations
             a_v_target, a_u_target = self._inverse_decoder_postprocessor(
                 next_position_adjusted,
                 noisy_position_sequence,
@@ -412,7 +478,65 @@ class GNNSimulator(BaseSimulator):
                 n_part_per_traj=n_particles_per_trajectory,
             )
 
-            return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
+            if self.model_name == "lles":
+                interpolate = kwargs["interpolate"]
+                interpolate_params = kwargs["interpolate_params"]
+
+                senders, receivers, edge_features, edge_directions = self._build_graph_from_raw(
+                    noisy_position_sequence,
+                    n_particles_per_trajectory,
+                    particle_types,
+                    pbc,
+                    u_velocity=u_velocity,
+                    interpolate_params=interpolate_params,
+                )
+                # Get predicted accelerations
+                a_v_pred, a_u_pred = self._encode_process_decode(
+                    edge_features,
+                    edge_directions,
+                    art_visc_h=self._connectivity_radius,
+                    senders=senders,
+                )
+            else:
+                node_features, edge_index, e_features = self._build_graph_from_raw(
+                    noisy_position_sequence,
+                    n_particles_per_trajectory,
+                    particle_types,
+                    pbc,
+                    u_velocity=u_velocity,
+                )
+                a_v_pred, a_u_pred = self._encode_process_decode(
+                    node_features, edge_index, e_features
+                )
+
+            if self.alpha_field != 0:
+                # Integrate predicted accelerations to get positions
+                pred_positions, pred_velocities = self._integrate_accelerations(
+                    a_v_pred=a_v_pred,
+                    position_sequence=position_sequence,
+                    pbc=pbc,
+                    a_u_pred=a_u_pred,
+                    u_velocity=kwargs["u_velocity"],
+                )
+                # Pred field
+                u_field_pred = interpolate(
+                    r=pred_positions, f=pred_velocities, npptr=n_particles_per_trajectory
+                )
+
+                # Target field
+                u_field_gt = interpolate(
+                    r=next_position_adjusted,
+                    f=next_u_velocity.squeeze(1),
+                    npptr=n_particles_per_trajectory,
+                )
+                return (a_v_pred, a_u_pred, u_field_gt), (
+                    a_v_target,
+                    a_u_target,
+                    u_field_pred,
+                )
+            else:
+                return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
+
         elif self.v2u_solver != "none":
             u_velocity = kwargs["u_velocity"]
             next_u_velocity = kwargs["next_u_velocity"]
@@ -454,7 +578,7 @@ class GNNSimulator(BaseSimulator):
 
             return predicted_normalized_acceleration, target_nomralized_acceleration
 
-    # PBC COMPATIBLE IMPLEMENTATION
+    # PBC compatible implementation
     def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):
         """Inverse of `_decoder_postprocessor`, with PBC support."""
         # Handle PBC for position differences
@@ -609,6 +733,48 @@ class GNNSimulator(BaseSimulator):
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             return v_normalized_acceleration
 
+    def _integrate_accelerations(
+        self, a_v_pred, position_sequence, pbc=True, a_u_pred=None, u_velocity=None
+    ):
+        """Integrate accelerations to get new positions and velocities for field prediction.
+
+        Args:
+            a_v_pred (Tensor): Normalized accelerations.
+            position_sequence (Tensor): Sequence of positions.
+            pbc (bool): Periodic boundary conditions. Defaults to True.
+            a_u_pred (Tensor, optional): Normalized accelerations for u velocity. Defaults to None.
+            u_velocity (Tensor, optional): u velocity. Defaults to None.
+
+        Returns:
+            Tuple[Tensor, Tensor]: New positions and velocities.
+        """
+        # The model produces the output in normalized space so we apply inverse normalization.
+        v_acceleration = self._denorm(a_v_pred, "va")
+
+        most_recent_position = position_sequence[:, -1]
+        most_recent_v_velocity = self.displ_fn(most_recent_position, position_sequence[:, -2])
+
+        if self.alpha_u != 0:
+            u_acceleration = self._denorm(a_u_pred, "ua")
+
+            most_recent_u_velocity = u_velocity[:, -1]
+
+            # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
+            if self.vel_solver == "simple":
+                new_v_velocity = most_recent_v_velocity + v_acceleration  # * dt = 1
+                new_u_velocity = most_recent_u_velocity + u_acceleration  # * dt = 1
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+            elif self.vel_solver == "tvf":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+            elif self.vel_solver == "simple_u":
+                new_u_velocity = most_recent_u_velocity + u_acceleration
+                new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
+                new_position = self.shift_fn(most_recent_position, new_v_velocity)
+
+            return new_position, new_u_velocity
+
 
 class GNNLitModule(BaseLitModule):
     """A LightningModule for training a Graph Network Simulator (GNS) model."""
@@ -628,6 +794,7 @@ class GNNLitModule(BaseLitModule):
         vel_solver: str = "simple",
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
+        alpha_field: float = 1.0,
         active_metrics: Dict[str, Any] = None,
         metric_space: Dict[str, str] = "norm",
         v2u_solver: str = "none",
@@ -655,6 +822,7 @@ class GNNLitModule(BaseLitModule):
         # Loss weights
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
+        self.alpha_field = alpha_field
 
         if (alpha_u != 0.0 or v2u_solver != "none") and ("KOLM" not in self.net._case):
             raise NotImplementedError(
@@ -676,6 +844,7 @@ class GNNLitModule(BaseLitModule):
         self.v2u_solver = v2u_solver
 
     def forward(self, features: Dict[str, Tensor]) -> Tensor:
+        """Forward pass through the model."""
         return self.net.predict_accelerations(**features)
 
     def model_step(self, batch: Any) -> Tensor:
@@ -707,6 +876,8 @@ class GNNLitModule(BaseLitModule):
             "particle_types": batch.particle_types,
             "pbc": any(self.net._pbc),
             "position_sequence_noise": position_sequence_noise,
+            "interpolate": self.metrics_interpolate,
+            "interpolate_params": self.metric_space.interpolate,
         }
         if self.pushforward is not None:
             features["normalization_stats"] = self.net.normalization_stats
@@ -725,25 +896,35 @@ class GNNLitModule(BaseLitModule):
             # pred and target should be tuples: (a_u_pred, a_v_pred), (a_u_target, a_v_target)
             pred, target = self.forward(features)
 
+        kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
         if self.alpha_u != 0.0 or self.v2u_solver != "none":
-            # Split predictions and targets into a_u and a_v
-            a_v_pred, a_u_pred = pred
-            a_v_target, a_u_target = target
-
-            # Calculate MSE loss
+            # Split predictions and targets
+            if self.alpha_field != 0.0:
+                a_v_pred, a_u_pred, field_pred = pred
+                a_v_target, a_u_target, field_target = target
+                # Calculate MSE field loss
+                loss_field = torch.nn.functional.mse_loss(
+                    field_pred, field_target, reduction="sum"
+                )
+                self.log("train/loss_field", loss_field, **kwargs_log)
+            else:
+                loss_field = 0.0
+                a_v_pred, a_u_pred = pred
+                a_v_target, a_u_target = target
+            # Calculate MSE particle loss
             loss_v = particle_mse(a_v_pred, a_v_target, non_kinematic_mask)
             loss_u = particle_mse(a_u_pred, a_u_target, non_kinematic_mask)
-            kwargs_log = {"prog_bar": True, "on_epoch": True, "batch_size": batch.batch_size}
             self.log("train/loss_u", loss_u, **kwargs_log)
             self.log("train/loss_v", loss_v, **kwargs_log)
 
             # Weighted combined loss
-            loss = self.alpha_v * loss_v + self.alpha_u * loss_u
+            loss = self.alpha_v * loss_v + self.alpha_u * loss_u + self.alpha_field * loss_field
 
             # TODO: add optional further models/losses for v2u_solver
         else:
             # Calculate loss
             loss = particle_mse(pred, target, non_kinematic_mask)
+            self.log("train/loss_v", loss, **kwargs_log)
 
         return loss
 
