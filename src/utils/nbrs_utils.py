@@ -209,9 +209,6 @@ def _nearest_batch_pbc(
         local_idx = edge_index[1][mask] - start
         edge_index[1][mask] = (local_idx % n_particles_per_trajectory[i]) + start
 
-    # Message passing layers expect source_to_target
-    edge_index = torch.flip(edge_index, dims=[0])
-
     return edge_index
 
 
@@ -303,107 +300,113 @@ if __name__ == "__main__":
     # Parameters
     Nx, L, dim = 4, 2 * np.pi, 2
     condition = "radius"  # "radius" or "knn"
-    use_query = True  # False or True
+    use_query = False  # False or True
 
-    # Derived parameters
-    dx = L / Nx
-    box_size = np.ones(dim) * L
-    k, cutoff = None, None
-    if condition == "knn":
-        k = 5  # 3 if dim == 2 else 4
-        circle_radius = k ** (1 / dim)
-    elif condition == "radius":
-        cutoff = 1.25 * dx
-        circle_radius = cutoff
-    kwargs = {"box": box_size, "condition": condition, "cutoff": cutoff, "k": k}
+    for condition, use_query in [
+        ("radius", False),
+        ("knn", False),
+        ("radius", True),
+        ("knn", True),
+    ]:
+        # Derived parameters
+        dx = L / Nx
+        box_size = np.ones(dim) * L
+        k, cutoff = None, None
+        if condition == "knn":
+            k = 5  # 3 if dim == 2 else 4
+            circle_radius = k ** (1 / dim)
+        elif condition == "radius":
+            cutoff = 1.25 * dx
+            circle_radius = cutoff
+        kwarg = {"box": torch.tensor(box_size), "condition": condition, "cutoff": cutoff, "k": k}
 
-    # Point cloud
-    import random
-    import matplotlib.pyplot as plt
+        # Point cloud
+        import random
+        import matplotlib.pyplot as plt
 
-    random.seed(0)
-    np.random.seed(0)
-    noise = np.random.normal(0, dx / 5, (Nx**dim, dim))
-    pos_demo = shift_fn(pos_init_cartesian_2d(box_size, dx), noise - dx / 2, box_size, pbc=True)
-    pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
-    n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
-    if use_query:
-        query = torch.tensor(pos_init_cartesian_2d(box_size, dx), dtype=torch.float32)
-        n_pptr_query = torch.tensor([len(query)])
-    else:
-        query = n_pptr_query = None
-
-    def plt_nbrs(ax, i, pos_demo, query, nbrs):
-        """Helper function."""
+        random.seed(0)
+        np.random.seed(0)
+        noise = np.random.normal(0, dx / 5, (Nx**dim, dim)) - dx / 2
+        pos_demo = shift_fn(pos_init_cartesian_2d(box_size, dx), noise, box_size, pbc=True)
+        pos_demo = torch.tensor(pos_demo, dtype=torch.float32)
+        n_part_per_traj = torch.tensor([pos_demo.shape[0]], dtype=torch.int64)
         if use_query:
-            ax.scatter(query[:, 0], query[:, 1], marker="x", alpha=0.5)
-        # for each neighbor of particle i, draw a line to its neighbors
-        pos_i = pos_demo[i] if query is None else query[i]
-        neighbors = nbrs[1][nbrs[0] == i]
-        for j in neighbors:
-            ax.arrow(
-                x=pos_i[0],
-                y=pos_i[1],
-                dx=pos_demo[j, 0] - pos_i[0],
-                dy=pos_demo[j, 1] - pos_i[1],
-                head_width=0.1,
-                head_length=0.2,
-                fc="red",
-                ec="red",
-                alpha=0.5,
-                length_includes_head=True,
+            query = torch.tensor(pos_init_cartesian_2d(box_size, dx), dtype=torch.float32)
+            n_pptr_query = torch.tensor([len(query)])
+        else:
+            query = n_pptr_query = None
+
+        def plt_nbrs(ax, i, pos_demo, query, nbrs):
+            """Helper function."""
+            if use_query:
+                ax.scatter(query[:, 0], query[:, 1], marker="x", alpha=0.5)
+            # for each neighbor of particle i, draw a line to its neighbors
+            pos_i = pos_demo[i] if query is None else query[i]
+            neighbors = nbrs[1][nbrs[0] == i]
+            for j in neighbors:
+                ax.arrow(
+                    x=pos_i[0],
+                    y=pos_i[1],
+                    dx=pos_demo[j, 0] - pos_i[0],
+                    dy=pos_demo[j, 1] - pos_i[1],
+                    head_width=0.1,
+                    head_length=0.2,
+                    fc="red",
+                    ec="red",
+                    alpha=0.5,
+                    length_includes_head=True,
+                )
+            # draw a circle around particle i with cutoff radius
+            for s in [[0, 0], [0, 1], [1, 1], [1, 0]]:
+                center = (pos_i[0] + s[0] * box_size[0], pos_i[1] + s[1] * box_size[1])
+                circle = plt.Circle(center, circle_radius, color="r", fill=False)
+                ax.add_artist(circle)
+                if not pbc:
+                    break
+            ax.set_xlim(0, L)
+            ax.set_ylim(0, L)
+            ax.set_aspect("equal", adjustable="box")
+            title_str = f"cutoff={cutoff:.3f}" if condition == "radius" else f"k={k}"
+            ax.set_title(f"Particle {i} has {len(neighbors)} neighbors with {title_str}")
+
+        ### Test neighbor search without batching
+        for pbc in [False, True]:
+            nbrs = nearest(
+                pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwarg
             )
-        # draw a circle around particle i with cutoff radius
-        for s in [[0, 0], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]:
-            center = (pos_i[0] + s[0] * box_size[0], pos_i[1] + s[1] * box_size[1])
-            circle = plt.Circle(center, circle_radius, color="r", fill=False)
-            ax.add_artist(circle)
-            if not pbc:
-                break
-        ax.set_xlim(0, L)
-        ax.set_ylim(0, L)
-        ax.set_aspect("equal", adjustable="box")
-        title_str = f"cutoff={cutoff:.3f}" if condition == "radius" else f"k={k}"
-        ax.set_title(f"Particle {i} has {len(neighbors)} neighbors with {title_str}")
 
-    ### Test neighbor search without batching
-    for pbc in [False, True]:
-        nbrs = nearest(
-            pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwargs
+            fig, ax = plt.subplots(figsize=(5, 5))
+            ax.scatter(pos_demo[:, 0], pos_demo[:, 1])
+            plt_nbrs(ax, 0, pos_demo, query, nbrs)
+            plt.tight_layout()
+            pbc_lbl = "pbc" if pbc else "nopbc"
+            query_lbl = "_query" if query is not None else ""
+            fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}.png")
+
+        ### Test neighbor search with batching
+        pos_demo_1 = copy.deepcopy(pos_demo)
+        pos_demo_2 = torch.tensor(
+            pos_init_cartesian_2d(box_size / 2, dx) - dx / 4, dtype=torch.float32
         )
+        pos_s = [pos_demo_1, pos_demo_2]
+        n_part_per_traj = torch.tensor([len(pos_demo_1), pos_demo_2.shape[0]], dtype=torch.int64)
+        pos_demo = torch.cat([pos_demo, pos_demo_2], dim=0)
+        if use_query:
+            query = query.repeat(2, 1)
+            n_pptr_query = n_pptr_query.repeat(2)
 
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.scatter(pos_demo[:, 0], pos_demo[:, 1])
-        plt_nbrs(ax, 0, pos_demo, query, nbrs)
-        plt.tight_layout()
-        pbc_lbl = "pbc" if pbc else "nopbc"
-        query_lbl = "_query" if query is not None else ""
-        fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}.png")
+        # Same as above, but two scatter plots for each point cloud in the batch
+        for pbc in [False, True]:
+            nbrs = nearest(
+                pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwarg
+            )
 
-    ### Test neighbor search with batching
-    pos_demo_1 = copy.deepcopy(pos_demo)
-    pos_demo_2 = torch.tensor(
-        pos_init_cartesian_2d(box_size / 2, dx) - dx / 4, dtype=torch.float32
-    )
-    pos_s = [pos_demo_1, pos_demo_2]
-    n_part_per_traj = torch.tensor([pos_demo_1.shape[0], pos_demo_2.shape[0]], dtype=torch.int64)
-    pos_demo = torch.cat([pos_demo, pos_demo_2], dim=0)
-    if use_query:
-        query = query.repeat(2, 1)
-        n_pptr_query = n_pptr_query.repeat(2)
-
-    # Same as above, but two scatter plots for each point cloud in the batch
-    for pbc in [False, True]:
-        nbrs = nearest(
-            pos_demo, n_part_per_traj, pbc=pbc, query=query, n_pptr_query=n_pptr_query, **kwargs
-        )
-
-        fig, axs = plt.subplots(1, 2, figsize=(10, 5.5))
-        for ind, i in enumerate([0, len(pos_demo_1)]):  # first particle in each batch
-            ax = axs[ind]
-            ax.scatter(pos_s[ind][:, 0], pos_s[ind][:, 1])
-            plt_nbrs(ax, i, pos_demo, query, nbrs)
-        plt.tight_layout()
-        pbc_lbl = "pbc" if pbc else "nopbc"
-        query_lbl = "_query" if query is not None else ""
-        fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}_batch.png")
+            fig, axs = plt.subplots(1, 2, figsize=(10, 5.5))
+            for ind, i in enumerate([0, len(pos_demo_1)]):  # first particle in each batch
+                ax = axs[ind]
+                ax.scatter(pos_s[ind][:, 0], pos_s[ind][:, 1])
+                plt_nbrs(ax, i, pos_demo, query, nbrs)
+            plt.tight_layout()
+            pbc_lbl = "pbc" if pbc else "nopbc"
+            query_lbl = "_query" if query is not None else ""
+            fig.savefig(f"nbrs{query_lbl}_{pbc_lbl}_{condition}_batch.png")

@@ -482,10 +482,10 @@ class GNNSimulator(BaseSimulator):
                     f=next_u_velocity.squeeze(1),
                     npptr=n_particles_per_trajectory,
                 )
-                return (a_v_pred, a_u_pred, u_field_gt), (
+                return (a_v_pred, a_u_pred, u_field_pred), (
                     a_v_target,
                     a_u_target,
-                    u_field_pred,
+                    u_field_gt,
                 )
             else:
                 return (a_v_pred, a_u_pred), (a_v_target, a_u_target)
@@ -856,9 +856,7 @@ class GNNLitModule(BaseLitModule):
                 a_v_pred, a_u_pred, field_pred = pred
                 a_v_target, a_u_target, field_target = target
                 # Calculate MSE field loss
-                loss_field = torch.nn.functional.mse_loss(
-                    field_pred, field_target, reduction="sum"
-                )
+                loss_field = torch.nn.functional.mse_loss(field_pred, field_target)
                 self.log("train/loss_field", loss_field, **kwargs_log)
             else:
                 loss_field = 0.0

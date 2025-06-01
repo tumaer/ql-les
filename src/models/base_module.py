@@ -253,7 +253,7 @@ class BaseSimulator(nn.Module):
         interp = kwargs.get("interpolate_params", {"condition": "radius"})
         if interp["condition"] == "radius":  # default
             # senders and receivers are integer vectors of shape (E,)
-            senders, receivers = nearest(
+            receivers, senders = nearest(
                 position_sequence[:, connectivity_on_nth_to_last],
                 n_particles_per_trajectory,
                 pbc,
@@ -261,7 +261,7 @@ class BaseSimulator(nn.Module):
                 cutoff=self._connectivity_radius,
             )
         elif interp["condition"] == "knn":
-            senders, receivers = nearest(
+            receivers, senders = nearest(
                 position_sequence[:, connectivity_on_nth_to_last],
                 n_particles_per_trajectory,
                 pbc,
