@@ -183,19 +183,25 @@ class BaseSimulator(nn.Module):
         connectivity_on_nth_to_last=-1,  # no reason to touch this in normal use
         **kwargs,
     ):
+        """
+        Build a graph from raw data, including node and edge features.
+
+        Args:
+            position_sequence (Tensor): Sequence of positions.
+            n_particles_per_trajectory (Tensor): Number of particles per trajectory.
+            particle_types (Tensor): Particle types.
+            pbc (bool): Periodic boundary conditions. Defaults to True.
+            node_features_type (list): List of node feature types to include. Defaults to None.
+                In purely lagrangian setup it it ["v"], in quasi-lagrangian ["v", "u"].
+            connectivity_on_nth_to_last (int): Time frame used for connectivity. Typically last
+                frame, i.e., -1. To reuse this for v2u model, we allow for -2.
+
+        Returns:
+            Tuple[Dict[str, Tensor], Tensor, Dict[str, Tensor]]: Node features, edge index, and edge features.
+        """
         device = position_sequence.device
         n_total_points = position_sequence.shape[0]
-        most_recent_position = position_sequence[:, -1]  # (n_nodes, 2)
-
-        # senders and receivers are integers of shape (E,)
-
-        senders, receivers = nearest(
-            position_sequence[:, connectivity_on_nth_to_last],
-            n_particles_per_trajectory,
-            pbc,
-            self._boundaries,
-            cutoff=self._connectivity_radius,
-        )
+        most_recent_position = position_sequence[:, -1]  # (N, D)
 
         batch_ids = torch.cat(
             [
@@ -243,27 +249,56 @@ class BaseSimulator(nn.Module):
             particle_type_embeddings = self._particle_type_embedding(particle_types)
             node_features["particle_type_embeddings"] = particle_type_embeddings
 
+        # Edge Construction
+        interp = kwargs.get("interpolate_params", {"condition": "radius"})
+        if interp["condition"] == "radius":  # default
+            # senders and receivers are integer vectors of shape (E,)
+            senders, receivers = nearest(
+                position_sequence[:, connectivity_on_nth_to_last],
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                cutoff=self._connectivity_radius,
+            )
+        elif interp["condition"] == "knn":
+            senders, receivers = nearest(
+                position_sequence[:, connectivity_on_nth_to_last],
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                k=interp["k"],
+                condition="knn",
+            )
+        else:
+            raise ValueError("Invalid neighbor condition")
+
         # Collect edge features.
         edge_features = {}
 
         # Relative displacement and distances normalized to radius
-        # (E, 2)
-        # normalized_relative_displacements = (
-        #     torch.gather(most_recent_position, 0, senders) - torch.gather(most_recent_position, 0, receivers)
-        # ) / self._connectivity_radius
-        normalized_relative_displacements = self.displ_fn(
-            most_recent_position[senders, :], most_recent_position[receivers, :]
-        )
+        r_ij = self.displ_fn(most_recent_position[senders, :], most_recent_position[receivers, :])
+        r_ij /= self._connectivity_radius
+        edge_features["normalized_relative_displacements"] = r_ij
+        edge_features["normalized_relative_distances"] = torch.norm(r_ij, dim=1, keepdim=True)
 
-        normalized_relative_displacements /= self._connectivity_radius
-        edge_features["normalized_relative_displacements"] = normalized_relative_displacements
+        if self.model_name == "lles":
+            EPS = 1e-6
+            most_recent_u_velocity = u_velocity_sequence[:, -1]
+            v_ij = self._norm(
+                most_recent_u_velocity[senders] - most_recent_u_velocity[receivers], key="uu"
+            )
+            r_sq = torch.sum(r_ij**2, dim=1, keepdim=True)
+            v_sq = torch.sum(v_ij**2, dim=1, keepdim=True)
+            dot_rv = torch.sum(r_ij * v_ij, dim=1, keepdim=True)
 
-        normalized_relative_distances = torch.norm(
-            normalized_relative_displacements, dim=-1, keepdim=True
-        )
-        edge_features["normalized_relative_distances"] = normalized_relative_distances
+            edge_features = torch.cat([torch.sqrt(r_sq), torch.sqrt(v_sq), dot_rv], dim=1)
+            edge_directions = torch.cat(
+                [r_ij / torch.sqrt(r_sq + EPS), v_ij / torch.sqrt(v_sq + EPS)], dim=1
+            )
+            return senders, receivers, edge_features, edge_directions
 
-        return node_features, torch.stack([senders, receivers]), edge_features
+        edge_index = torch.stack([senders, receivers], dim=0)
+        return node_features, edge_index, edge_features
 
     def forward(self):
         """Forward pass of the model."""
@@ -301,17 +336,23 @@ class BaseLitModule(LightningModule):
         self.visualize = visualize
         self.trajectory_idx = 0
 
-        if metric_space is not None:
-            self.metrics_interpolate = GridInterpolator(
-                is_periodic=any(self.net._pbc),
-                domain_size=[x[1] for x in self.net._boundaries],
-                dim=self.net.dim,
-                dx=self.net.metadata["dx"],
-                condition=metric_space.interpolate["condition"],
-                k=metric_space.interpolate["k"],
-                cutoff_factor=metric_space.interpolate["cutoff_factor"],
-                kernel=metric_space.interpolate["kernel"],
-            )
+        # Determine dx: either from metadata or computed from grid resolution
+        if "grid_res" in metric_space.interpolate:
+            grid_res = metric_space.interpolate["grid_res"]
+            dx = self.net._boundaries[0][1] / grid_res
+        else:
+            dx = self.net.metadata["dx"]
+
+        self.metrics_interpolate = GridInterpolator(
+            is_periodic=any(self.net._pbc),
+            domain_size=[x[1] for x in self.net._boundaries],
+            dim=self.net.dim,
+            dx=dx,
+            condition=metric_space.interpolate["condition"],
+            k=metric_space.interpolate["k"],
+            cutoff_factor=metric_space.interpolate["cutoff_factor"],
+            kernel=metric_space.interpolate["kernel"],
+        )
 
     def model_step(self):
         """Batch in, loss out."""
