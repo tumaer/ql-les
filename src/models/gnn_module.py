@@ -58,7 +58,7 @@ class GNNSimulator(BaseSimulator):
             assert alpha_u == 0, "v2u_solver is only implemented for alpha_u = 0."
 
         self._num_particle_types = num_particle_types
-        if model_name != "lles":
+        if model_name != "lles" and num_particle_types > 1:
             self._particle_type_embedding = nn.Embedding(
                 num_particle_types, particle_type_embedding_size
             )  # (9, 16)

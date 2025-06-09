@@ -297,7 +297,7 @@ class BaseSimulator(nn.Module):
             )
             return senders, receivers, edge_features, edge_directions
 
-        edge_index = torch.stack([senders, receivers], dim=0)
+        edge_index = torch.stack([senders, receivers], dim=0)  # flipped compared to PyG
         return node_features, edge_index, edge_features
 
     def forward(self):

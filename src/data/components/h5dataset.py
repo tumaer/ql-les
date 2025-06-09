@@ -57,8 +57,8 @@ class H5Dataset(Dataset):
         name: Optional[str] = None,
         input_seq_length: int = 6,
         extra_seq_length: int = 0,
-        nl_backend: str = "matscipy",
         regime: str = "train",
+        only_beginning: bool = False,
     ):
         """Initialize the dataset. If the dataset is not present, it is downloaded.
 
@@ -74,9 +74,12 @@ class H5Dataset(Dataset):
             extra_seq_length: During training, this is the maximum number of pushforward
                 unroll steps. During validation/testing, this specifies the largest
                 N-step MSE loss we are interested in, e.g. for best model checkpointing.
-            nl_backend: Which backend to use for the neighbor list
             regime: [train|inference] - used to determine the dataset slicing
+            only_beginning: If True, there will be only one sample per trajectory.
         """
+
+        if only_beginning:
+            assert regime == "inference", "This argument is currently not supported for training."
 
         dataset_path = osp.normpath(dataset_path)  # remove potential trailing slash
 
@@ -94,7 +97,6 @@ class H5Dataset(Dataset):
         self.dataset_path = dataset_path
         self.file_path = osp.join(dataset_path, split + ".h5")
         self.input_seq_length = input_seq_length
-        self.nl_backend = nl_backend
         self.split = split
 
         force_fn_path = osp.join(dataset_path, "force.py")
@@ -151,6 +153,8 @@ class H5Dataset(Dataset):
             # _split_valid_traj_into_n = 1000 // (20 + 6) chunks.
             self.subseq_length = input_seq_length + extra_seq_length
             self._split_valid_traj_into_n = self.sequence_length // self.subseq_length
+            if only_beginning:
+                self._split_valid_traj_into_n = 1
 
             self.num_samples = self._split_valid_traj_into_n * len(self.traj_keys)
             self.getter = self.get_trajectory
@@ -322,3 +326,41 @@ def get_dataset_name_from_path(path: str) -> str:
         )
         name = dir
     return name
+
+
+if __name__ == "__main__":
+    """Example usage of the H5Dataset class."""
+
+    def print_ds(dataset: H5Dataset):
+        print("###### Dataset Information ######")
+        print(f"Dataset name: {dataset.name}")
+        print(f"Number of samples: {len(dataset)}")
+        print(f"Number of trajectories: {len(dataset.traj_keys)}")
+        print(f"Trajectory length: {dataset.sequence_length}")
+        print(f"Subsequence length: {dataset.subseq_length}")
+        print("Sample data structure:")
+        sample = dataset[0]
+        for k, v in sample:
+            print(f"{k}: {v.shape if isinstance(v, torch.Tensor) else v}")
+        print("##################################")
+
+    dataset = H5Dataset(
+        split="train",
+        dataset_path="data/2D_TGV_2500_10kevery100",
+        input_seq_length=6,
+        extra_seq_length=0,
+        regime="train",
+    )
+    print_ds(dataset)
+
+    for only_beginning in [False, True]:
+        dataset = H5Dataset(
+            split="valid",
+            dataset_path="data/2D_TGV_2500_10kevery100",
+            input_seq_length=6,
+            extra_seq_length=20,
+            regime="inference",
+            only_beginning=only_beginning,
+        )
+        print(f"\nValidation dataset with only_beginning={only_beginning}:")
+        print_ds(dataset)

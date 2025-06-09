@@ -15,12 +15,12 @@ class SPHDataModule(LightningDataModule):
         input_seq_length: int = 6,
         max_pushforward_steps: int = 0,
         max_rollout_steps: int = 0,
-        nl_backend: str = "jaxmd_vmap",
         num_workers: int = 0,
         pin_memory: bool = False,
         shuffle: bool = True,
         limit_train_batches: Optional[float] = None,
         overfit: bool = False,
+        only_beginning: bool = False,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -28,12 +28,12 @@ class SPHDataModule(LightningDataModule):
         self.input_seq_length = input_seq_length
         self.max_rollout_steps = max_rollout_steps
         self.max_pushforward_steps = max_pushforward_steps
-        self.nl_backend = nl_backend
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.shuffle = shuffle
         self.limit_train_batches = limit_train_batches
         self.overfit = overfit
+        self.only_beginning = only_beginning
 
         self.train_dataset = None
         self.val_dataset = None
@@ -52,7 +52,6 @@ class SPHDataModule(LightningDataModule):
                 dataset_path=self.data_dir,
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_pushforward_steps,
-                nl_backend=self.nl_backend,
                 regime="train",
             )
             if self.limit_train_batches is not None:
@@ -64,8 +63,8 @@ class SPHDataModule(LightningDataModule):
                 dataset_path=self.data_dir,
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
-                nl_backend=self.nl_backend,
                 regime="inference",
+                only_beginning=self.only_beginning,
             )
         elif stage == "test":
             self.test_dataset = H5Dataset(
@@ -73,8 +72,8 @@ class SPHDataModule(LightningDataModule):
                 dataset_path=self.data_dir,
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_rollout_steps,
-                nl_backend=self.nl_backend,
                 regime="inference",
+                only_beginning=self.only_beginning,
             )
         else:
             raise ValueError(f"Stage {stage} not recognized.")
