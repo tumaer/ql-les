@@ -18,7 +18,7 @@ model_checkpoint:
 
 early_stopping:
   monitor: "val/loss"
-  patience: 10
+  patience: 20 # we evaluate every 10k steps, so this is 200k steps
   mode: "min"
 
 model_summary:

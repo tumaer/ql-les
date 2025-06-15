@@ -145,10 +145,10 @@ def eval_single_rollout(
                 pbc=pbc,
             )
             kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
-            next_position_ground_truth = ground_truth_positions[:, step]
+            next_position_ground_truth = ground_truth_positions[:, step].to(device)
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
-            position_predictions.append(next_position)
+            position_predictions.append(next_position.detach().cpu())
             current_positions = torch.cat(
                 [current_positions[:, 1:], next_position[:, None, :]], dim=1
             )
@@ -163,10 +163,10 @@ def eval_single_rollout(
             ground_truth_positions,
             metadata,
             active_metrics,
-            features["bounds"],
+            features["bounds"].detach().cpu(),
             pbc=pbc,
             metric_space=metric_space,
-            most_recent_position=features["enc_pos"][:, -1],
+            most_recent_position=features["enc_pos"][:, -1].detach().cpu(),
         )
 
         return computed_metrics, trajectory_rollout, ground_truth_positions

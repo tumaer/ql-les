@@ -21,16 +21,14 @@ if [ "$#" -ne 3 ]; then
   exit 1
 fi
 
-# DOF:
-
 # Read command-line arguments
 EVERY_N="$1"  # can be specified as "1" or "10"
 SEED="$2"  # for reproducibility
 EXTRAS="$3"  # for additional arguments
 
-echo "Training v2u-GNSF on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
+echo "Training v2u-GNS on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
 # shellcheck disable=SC2086
-python src/train.py experiment=lag_kolm2d_every"${EVERY_N}".yaml \
+python src/train.py experiment=kolm_every_"${EVERY_N}"/lag.yaml \
   seed="${SEED}" +logger.wandb.name=lag ${EXTRAS}
 ### Runs
 
@@ -52,3 +50,7 @@ python src/train.py experiment=lag_kolm2d_every"${EVERY_N}".yaml \
 ### Runs 07.05.25 -> add more v2u_solvers;
 # sbatch scripts/slurm_lag.sh 1 12345 ""
 # sbatch scripts/slurm_lag.sh 1 12345 "model.v2u_solver=smooth"
+
+#################### hyperparameter tuning every1 ####################
+### Runs 15.05.25
+# sbatch scripts/slurm_lag.sh 10 12345 ""
