@@ -175,6 +175,9 @@ def eval_single_rollout(
         u_vel_predictions = []
         x_grid = None
         for step in range(num_rollout_steps):
+            if hasattr(simulator, "_cfg_every"):
+                simulator.neuralsph.cfg["active"] = ((step + 1) % simulator._cfg_every) == 0
+
             out = simulator.predict_positions(
                 current_positions=current_positions,
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],

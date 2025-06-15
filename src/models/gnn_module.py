@@ -242,9 +242,7 @@ class GNNSimulator(BaseSimulator):
                 _, _, new_position = self._sph_rlx(
                     new_position,
                     kwargs["n_part_per_traj"],
-                    is_tvf=self.neuralsph["is_tvf"],
-                    dt_factor=self.neuralsph["dt_factor"],
-                    num_steps=self.neuralsph["num_steps"],
+                    **self.neuralsph,
                 )
 
             return new_position, new_u_velocity
@@ -263,9 +261,7 @@ class GNNSimulator(BaseSimulator):
                 _, _, new_position = self._sph_rlx(
                     new_position,
                     kwargs["n_part_per_traj"],
-                    is_tvf=self.neuralsph["is_tvf"],
-                    dt_factor=self.neuralsph["dt_factor"],
-                    num_steps=self.neuralsph["num_steps"],
+                    **self.neuralsph,
                 )
 
             return new_position, new_u_velocity
@@ -277,9 +273,7 @@ class GNNSimulator(BaseSimulator):
                 _, _, new_position = self._sph_rlx(
                     new_position,
                     kwargs["n_part_per_traj"],
-                    is_tvf=self.neuralsph["is_tvf"],
-                    dt_factor=self.neuralsph["dt_factor"],
-                    num_steps=self.neuralsph["num_steps"],
+                    **self.neuralsph,
                 )
         return new_position
 

@@ -125,7 +125,7 @@ class BaseSimulator(nn.Module):
         """Convert displacement of positions `v` to velocity `u = (x1 - x0) / dt`."""
         return v / self._effective_dt
 
-    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps):
+    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps, cfg=None):
         """Relax a point cloud in the exact same way as during dataset generation."""
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
@@ -136,18 +136,38 @@ class BaseSimulator(nn.Module):
                 L=self._boundaries[0].item(),
                 is_physical=True,
                 u_ref=self.metadata["u_ref"],
-                is_tvf=is_tvf,  # our relaxations always use tvf
+                is_tvf=is_tvf,
                 nu=0.0,  # relaxations assume zero velocity, so this term drops
                 box=self._boundaries,
             )
+        rlx_fn = self._relax_fn
+
+        if cfg is not None:
+            # create second _relax_fn with tvf as specified in cfg
+            # typically _relax_fn has no TVF while _relax_fn_2 has TVF
+            assert "is_tvf" in cfg, "cfg must contain 'is_tvf' key"
+            if not hasattr(self, "_relax_fn_2"):
+                self._relax_fn_2 = relax_wrapper(
+                    Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                    dim=self.metadata["dim"],
+                    L=self._boundaries[0].item(),
+                    is_physical=True,
+                    u_ref=self.metadata["u_ref"],
+                    is_tvf=cfg["is_tvf"],
+                    nu=0.0,  # relaxations assume zero velocity, so this term drops
+                    box=self._boundaries,
+                    tvf_factor=cfg.get("tvf_factor", 1.0),
+                )
+            if cfg["active"]:
+                rlx_fn = self._relax_fn_2
+            if cfg.get("only_cfg", False) and (not cfg["active"]):
+                dt_factor = 0.0
 
         dt_factor = dt_factor
         v = 0.0
         # r_input = r.detach().clone()
         for i in range(num_steps):
-            a_temp = self._relax_fn(
-                r, n_part_per_traj
-            )  # , verbose=True if (i==num_steps-1) else False)
+            a_temp = rlx_fn(r, n_part_per_traj)  # , verbose=True if (i==num_steps-1) else False)
             dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
             r = shift_fn(r, dr)
             v += dr
@@ -329,6 +349,8 @@ class BaseLitModule(LightningModule):
         self.save_hyperparameters(logger=False, ignore=["net"])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.neuralsph = neuralsph
+        if "cfg_every" in neuralsph:
+            self.net._cfg_every = neuralsph["cfg_every"]
 
         self.num_rollout_steps = num_rollout_steps
         self.active_metrics = active_metrics

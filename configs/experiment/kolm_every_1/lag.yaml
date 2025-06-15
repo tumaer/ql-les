@@ -1,36 +1,25 @@
 # @package _global_
 defaults:
+  - /experiment/kolm_every_1/base
   - override /model: gns
-  - override /data: kolm2d_every1
-  - override /trainer: gpu
-  - override /vars: default
-  - override /callbacks: default
-  - override /logger: wandb
 
 model:
   _target_: src.models.gnn_module.GNNLitModule
   net:
-    noise_std: 0.0
-    # for v2u_solver=smooth
-    v2u_smooth:
+    # noise_std: 0.0
+    v2u_smooth: # for v2u_solver=smooth
       condition: radius # "radius", "knn"
       k: 15
       cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
       kernel: "quintic" # "xsqinv" wouldn't make sense as it only selects the self
-    # for v2u_solver=gnn
-    v2u_gnn:
+    v2u_gnn: # for v2u_solver=gnn
       ckpt_path: "/home/atoshev/code/sph_les/logs/train/runs/2025-05-10_05-09-50/checkpoints/last.ckpt"
   pushforward: null
   vel_solver: "simple"
-  v2u_solver: "gnn" #  ["none", "same", "smooth", "gnn"]. Only "none" compatible with vel_solver!="simple"
-
-tags: ["kolm", "gns"]
+  v2u_solver: "none" #  ["none", "same", "smooth", "gnn"]. Only "none" compatible with vel_solver!="simple"
 
 logger:
   wandb:
     project: "lag_kolm2d_every1"
 
-seed: 12345
-
-data:
-  num_workers: 2
+tags: ["kolm1", "lag"]

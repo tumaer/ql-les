@@ -1,11 +1,7 @@
 # @package _global_
 defaults:
+  - /experiment/kolm_every_1/base
   - override /model: lles
-  - override /data: kolm2d_every1
-  - override /trainer: gpu
-  - override /vars: kolm2d
-  - override /callbacks: default
-  - override /logger: wandb
 
 model:
   _target_: src.models.gnn_module.GNNLitModule
@@ -18,10 +14,8 @@ model:
   alpha_u: 1.0
   alpha_v: 1.0
 
-tags: ["kolm", "lles"]
-
 logger:
   wandb:
-    project: "kolm2d_every10"
+    project: "kolm2d_every1"
 
-seed: 12345
+tags: ["kolm1", "lles"]
