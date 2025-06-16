@@ -3,6 +3,9 @@
 
 #### Train
 # python src/train.py experiment=kolm_every_1/lag.yaml +logger.wandb.name=lag
+# python src/train.py experiment=kolm_every_1/v2u_gnn.yaml +logger.wandb.name=lag
+# or
+# sbatch -J v2u1 scripts/slurm_train.sh "experiment=kolm_every_1/v2u_gnn.yaml +logger.wandb.name=v2u1"
 
 #### Inference
 run_basic() {

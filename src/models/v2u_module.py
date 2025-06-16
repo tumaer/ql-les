@@ -54,7 +54,7 @@ class V2USimulator(BaseSimulator):
 
         # Compute the target normalized acceleration -> normalization with "ua"/"va" overshoots
         a_u_target = next_u_velocity - self._v2u(next_v_velocity)  # TODO: consider u over ua
-        a_u_target *= 5  # manually tuned number for normalization, TODO: remove this
+        # a_u_target *= 5  # manually tuned number for normalization, TODO: remove this
 
         # Construct the input graph to the gnn
         node_features, edge_index, e_features = self._build_graph_from_raw(

@@ -376,7 +376,7 @@ class GNNSimulator(BaseSimulator):
                 # run gnn
                 # print(self.v2u_gnn.v2u_gnn._encoder.node_fn[0][0].weight.device)
                 a_u_pred = self.v2u_gnn.v2u_gnn(node_features, edge_index, e_features)
-                u_acceleration = a_u_pred / 5  # TODO: remove manual normalization
+                u_acceleration = a_u_pred  # / 5  # TODO: remove manual normalization
                 # u := v + u_acceleration
                 new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
 

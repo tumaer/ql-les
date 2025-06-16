@@ -53,4 +53,10 @@ python src/train.py experiment=kolm_every_"${EVERY_N}"/lag.yaml \
 
 #################### hyperparameter tuning every1 ####################
 ### Runs 15.05.25
+# sbatch scripts/slurm_lag.sh 10 12345 "model.optimizer.lr=0.0003"
 # sbatch scripts/slurm_lag.sh 10 12345 ""
+# sbatch scripts/slurm_lag.sh 10 12345 "model.optimizer.lr=0.00003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.0003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.00003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.000003"

@@ -349,7 +349,7 @@ class BaseLitModule(LightningModule):
         self.save_hyperparameters(logger=False, ignore=["net"])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.neuralsph = neuralsph
-        if "cfg_every" in neuralsph:
+        if (neuralsph is not None) and ("cfg_every" in neuralsph):
             self.net._cfg_every = neuralsph["cfg_every"]
 
         self.num_rollout_steps = num_rollout_steps
@@ -359,22 +359,23 @@ class BaseLitModule(LightningModule):
         self.trajectory_idx = 0
 
         # Determine dx: either from metadata or computed from grid resolution
-        if "grid_res" in metric_space.interpolate:
+        if (metric_space is not None) and ("grid_res" in metric_space.interpolate):
             grid_res = metric_space.interpolate["grid_res"]
             dx = self.net._boundaries[0][1] / grid_res
         else:
             dx = self.net.metadata["dx"]
 
-        self.metrics_interpolate = GridInterpolator(
-            is_periodic=any(self.net._pbc),
-            domain_size=[x[1] for x in self.net._boundaries],
-            dim=self.net.dim,
-            dx=dx,
-            condition=metric_space.interpolate["condition"],
-            k=metric_space.interpolate["k"],
-            cutoff_factor=metric_space.interpolate["cutoff_factor"],
-            kernel=metric_space.interpolate["kernel"],
-        )
+        if metric_space is not None:
+            self.metrics_interpolate = GridInterpolator(
+                is_periodic=any(self.net._pbc),
+                domain_size=[x[1] for x in self.net._boundaries],
+                dim=self.net.dim,
+                dx=dx,
+                condition=metric_space.interpolate["condition"],
+                k=metric_space.interpolate["k"],
+                cutoff_factor=metric_space.interpolate["cutoff_factor"],
+                kernel=metric_space.interpolate["kernel"],
+            )
 
     def model_step(self):
         """Batch in, loss out."""

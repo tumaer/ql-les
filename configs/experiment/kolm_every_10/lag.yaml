@@ -13,7 +13,7 @@ model:
       cutoff_factor: 2.0 # for Quintic would have been 3, but here it is just a metric
       kernel: "quintic" # "xsqinv" wouldn't make sense as it only selects the self
     v2u_gnn: # for v2u_solver=gnn
-      ckpt_path: ???
+      ckpt_path: null
   pushforward: null
   vel_solver: "simple"
   v2u_solver: "none" #  ["none", "same", "smooth", "gnn"]. Only "none" compatible with vel_solver!="simple"
