@@ -198,17 +198,17 @@ class GNNSimulator(BaseSimulator):
 
             elif self.vel_solver == "tvf":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
-                new_v_velocity = self._u2v(new_u_velocity) + v_acceleration
+                new_v_velocity = self._u2v(new_u_velocity) + (v_acceleration * 20)
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             elif self.vel_solver == "neural_sph":
                 new_v_velocity = most_recent_v_velocity + v_acceleration
-                new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
+                new_u_velocity = self._v2u(new_v_velocity) + (u_acceleration * 20)
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             elif self.vel_solver == "simple_u":
                 new_u_velocity = most_recent_u_velocity + u_acceleration
-                new_v_velocity = self._u2v(most_recent_u_velocity) + v_acceleration
+                new_v_velocity = self._u2v(most_recent_u_velocity) + (v_acceleration * 20)
                 new_position = self.shift_fn(most_recent_position, new_v_velocity)
 
             elif self.vel_solver == "simple_u_closure":
@@ -535,6 +535,7 @@ class GNNSimulator(BaseSimulator):
             next_u_velocity = kwargs["next_u_velocity"].squeeze(1)
             previous_u_velocity = kwargs["u_velocity"][:, -1]
 
+            # TODO: manually rescale accelerations to resemble normal distribution: by 20x
             # Update velocity and position, use an Euler integrator to go from acceleration to position, assuming dt = 1.
             if self.vel_solver == "simple":
                 u_acceleration = next_u_velocity - previous_u_velocity
@@ -542,15 +543,15 @@ class GNNSimulator(BaseSimulator):
 
             elif self.vel_solver == "tvf":
                 u_acceleration = next_u_velocity - previous_u_velocity
-                v_acceleration = next_v_velocity - self._u2v(next_u_velocity)
+                v_acceleration = (next_v_velocity - self._u2v(next_u_velocity)) / 20
 
             elif self.vel_solver == "neural_sph":
+                u_acceleration = (next_u_velocity - self._v2u(next_v_velocity)) / 20
                 v_acceleration = next_v_velocity - previous_v_velocity
-                u_acceleration = next_u_velocity - self._v2u(next_v_velocity)
 
             elif self.vel_solver == "simple_u":
                 u_acceleration = next_u_velocity - previous_u_velocity
-                v_acceleration = next_v_velocity - self._u2v(previous_u_velocity)
+                v_acceleration = (next_v_velocity - self._u2v(previous_u_velocity)) / 20
 
             elif self.vel_solver == "simple_u_closure":
                 au_sph = self._sph(
@@ -671,6 +672,12 @@ class GNNSimulator(BaseSimulator):
 
             v_normalized_acceleration = self._norm(v_acceleration, "va")
             u_normalized_acceleration = self._norm(u_acceleration, "ua")
+            # print(
+            #     f"Acc. stds.: v={v_normalized_acceleration.std():.4f}, u={u_normalized_acceleration.std():.4f} "
+            #     f"v_tvf={self._norm((next_v_velocity - self._u2v(next_u_velocity))/20, 'va').std():.4f} "
+            #     f"u_nsph={self._norm((next_u_velocity - self._v2u(next_v_velocity))/20, 'ua').std():.4f} "
+            #     f"v_simple_u={self._norm((next_v_velocity - self._u2v(previous_u_velocity))/20, 'va').std():.4f} "
+            #     )
             return v_normalized_acceleration, u_normalized_acceleration
         else:
             # Compute acceleration
@@ -902,7 +909,7 @@ class GNNLitModule(BaseLitModule):
                 # these methods do not have trainable parameters toward improving u.
                 # thus, u should not be used in early stopping criterium.
                 _loss = position_loss["mse"].mean()
-            elif self.v2u_solver == "gnn":
+            elif self.v2u_solver == "gnn" or self.alpha_u != 0.0:
                 _loss = position_loss["mse"].mean() + u_vel_loss.mean()
             self.log(f"{split}/loss", _loss, **kwargs_log)
             self.log(f"{split}/u_loss", u_vel_loss.mean(), **kwargs_log)

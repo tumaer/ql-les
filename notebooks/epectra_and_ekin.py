@@ -18,6 +18,7 @@ config.update("jax_platforms", "cpu")
 
 
 def get_metadata(path):
+    """Load dataset metadata from the given path."""
     metadata = load_metadata(path)
     dim, dx = metadata["dim"], metadata["dx"]
     N_total = metadata["num_particles_max"]
@@ -28,6 +29,8 @@ def get_metadata(path):
 
 
 class EkinSpectrumComputer:
+    """Class for computing kinetic energy and energy spectrum."""
+
     def __init__(self, metadata_root):
         dim, dx, N_total, Nx, box_size = get_metadata(metadata_root)
         self.dim = dim
@@ -52,6 +55,7 @@ class EkinSpectrumComputer:
         )
 
     def comp_spectrum(self, r, u):
+        """Compute the energy spectrum from the particle positions and velocities."""
         dim, Nx, N_total = self.dim, self.Nx, self.N_total
         assert r.shape == (N_total, dim)
         assert u.shape == (N_total, dim)
@@ -70,6 +74,7 @@ class EkinSpectrumComputer:
         return spectrum
 
     def get_ekin_and_spectrum(self, rollout, ekin_axis, is_spectrum, is_gt=False):
+        """Compute kinetic energy and energy spectrum given rollout and time steps."""
         if is_gt:
             keys = ["ground_truth_rollout", "ground_truth_u_vel"]
         else:
@@ -121,18 +126,32 @@ def plt_ekin_and_spectra(
         # print("Start path", path)
 
         if name == "SPH":
-            # TODO: add all 5 trajectories
-            ekin_sub = []
-            for t in ekin_axis:
-                frame = read_h5(f"{path}/traj_{str(t * every_n).zfill(5)}.h5")
-                u = frame["u"]
-                ekin_sub.append((u**2).sum())
-            ekin[name].append(0.5 * np.array(ekin_sub) * dx**2)
+            for path_i in path:
+                # check if preprocessed stats file exists
+                stats_file = os.path.join(path_i, "stats.pkl")
+                if os.path.exists(stats_file):
+                    stats = pickle.load(open(stats_file, "rb"))
+                else:
+                    stats = {"ekin": {}, "spectra": {}}
 
-            # print(frame["r"].shape, u.shape)
-            spectrum = computer.comp_spectrum(frame["r"], u)
-            # print(len(spectrum), len(ekin_sub))
-            spectra[name].append(spectrum[1 : len(k_axis) + 1])
+                ekin_sub = []
+                for t in ekin_axis:
+                    if t not in stats["ekin"]:
+                        # read the trajectory file
+                        frame = read_h5(f"{path_i}/traj_{str(t * every_n).zfill(5)}.h5")
+                        stats["ekin"][t] = 0.5 * (frame["u"] ** 2).sum() * dx**2
+                    ekin_sub.append(stats["ekin"][t])
+                ekin[name].append(np.array(ekin_sub))
+
+                if t not in stats["spectra"]:
+                    frame = read_h5(f"{path_i}/traj_{str(t * every_n).zfill(5)}.h5")
+                    stats["spectra"][t] = computer.comp_spectrum(frame["r"], frame["u"])
+                # print(len(spectrum), len(ekin_sub))
+                spectra[name].append(stats["spectra"][t][1 : len(k_axis) + 1])
+
+                # save the stats for this path
+                with open(stats_file, "wb") as f:
+                    pickle.dump(stats, f)
 
         elif "rlt" in path:
             # load precomputed stats if available
@@ -315,6 +334,7 @@ def plt_ekin_and_spectra(
 
 
 def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", data_root="."):
+    """Get paths and names for the given experiment name. Used by `plt_ekin_and_spectra`."""
     if is_every1:
         ckpts = {  # on every 1 step
             "lag": "2025-06-02_03-21-52",
@@ -326,10 +346,18 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     def rlt_path(ckpt_date, rlt_type):
         return os.path.join(root_logs, ckpt_date, "rlt", rlt_type)
 
+    sph_paths = [
+        f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+        f"{data_root}/data/2D_KOLM_SPH_0_20250616-002306_TVF_16",
+        f"{data_root}/data/2D_KOLM_SPH_0_20250616-002425_TVF_17",
+        f"{data_root}/data/2D_KOLM_SPH_0_20250616-002543_TVF_18",
+        f"{data_root}/data/2D_KOLM_SPH_0_20250616-002701_TVF_19",
+    ]
+
     if experiment == "lag_1001_nsph":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             rlt_path(ckpts["lag"], "1001_nsph02"),
             rlt_path(ckpts["lag"], "1001_nsph05"),
             rlt_path(ckpts["lag"], "1001_nsph1"),
@@ -346,7 +374,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     elif experiment == "lag_101_v2u_nsph":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             rlt_path(ckpts["lag"], "101"),
             rlt_path(ckpts["lag"], "101_nsph1"),
             rlt_path(ckpts["lag"], "101_gnn"),
@@ -363,7 +391,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     elif experiment == "lag_1001_v2u_nsph":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             rlt_path(ckpts["lag"], "1001_nsph1"),
             rlt_path(ckpts["lag"], "1001_gnn_nsph1"),
             rlt_path(ckpts["lag"], "1001_gnn"),
@@ -380,7 +408,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     elif experiment == "lag_5001_v2u_nsph":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             # rlt_path(ckpts["lag"], "5001_nsph1tvf"),
             # rlt_path(ckpts["lag"], "5001_nsph1tvf01"),
             # rlt_path(ckpts["lag"], "5001_nsph1tvf002"),
@@ -419,7 +447,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     elif experiment == "lag_101_v2u_nsph1tvf":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             rlt_path(ckpts["lag"], "101_nsph1"),
             rlt_path(ckpts["lag"], "101_nsph1tvf01"),
             rlt_path(ckpts["lag"], "101_nsph1tvf1"),
@@ -434,7 +462,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
     elif experiment == "lag_20000_v2u_nsph":
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             rlt_path(ckpts["lag"], "20000_nsph1tvf001"),
             rlt_path(ckpts["lag"], "20000_nsph1tvf0005"),
             rlt_path(ckpts["lag"], "20000_nsph1tvf100"),
@@ -450,7 +478,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
             # "/home/atoshev/code/sph-turbulence/gen_dataset/data/2D_KOLM_SPH_0_20250210-232517_SPH_15",
-            f"{data_root}/data/2D_KOLM_SPH_0_20250210-232340_TVF_15",
+            sph_paths,
             # rlt_path(ckpts["simple_rlx"], rlt_type),
         ]
         names = [
@@ -471,4 +499,4 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
 # plt_ekin_and_spectra("lag_1001_v2u_nsph", every_n=1, step_last=1000, step_stride=50)
 # plt_ekin_and_spectra("lag_5001_v2u_nsph", every_n=1, step_last=5000, step_stride=100)
 # plt_ekin_and_spectra("lag_101_v2u_nsph1tvf", every_n=1, step_last=100, step_stride=10)
-plt_ekin_and_spectra("lag_20000_v2u_nsph", every_n=1, step_last=19999, step_stride=100)
+# plt_ekin_and_spectra("lag_20000_v2u_nsph", every_n=1, step_last=19999, step_stride=100)

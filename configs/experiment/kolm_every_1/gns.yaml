@@ -9,7 +9,7 @@ model:
     noise_std: 0.0
     node_features_type: ["v", "u"]
   pushforward: null
-  vel_solver: "simple" # "simple", "tvf", "neural_sph"
+  vel_solver: "simple" # "none", "simple", "tvf", "neural_sph", "simple_u", "simple_u_closure", "simple_rlx"
   alpha_u: 1.0
   alpha_v: 1.0
 

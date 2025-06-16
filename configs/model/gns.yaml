@@ -77,7 +77,7 @@ metric_space:
 
 alpha_u: 0.0
 alpha_v: 1.0
-alpha_field: 0.0
+alpha_field: 0.0 # used for grid-based loss in L-LES style
 
 visualize:
   vis_test:
