@@ -114,7 +114,7 @@ def plt_ekin_and_spectra(
     assert every_n in [1, 10], "Only every_n=1 or every_n=10 is supported"
     paths, names = get_paths_names(experiment, every_n == 1)
     assert len(paths) == len(names), "Number of paths and names must match"
-    ekin_axis = np.arange(0, step_last + 1, step_stride // every_n)
+    ekin_axis = np.arange(0, step_last + 1, step_stride)
 
     computer = EkinSpectrumComputer(paths[0])
     dx, k_axis = computer.dx, computer.k_axis
@@ -136,18 +136,18 @@ def plt_ekin_and_spectra(
 
                 ekin_sub = []
                 for t in ekin_axis:
-                    if t not in stats["ekin"]:
+                    if t * every_n not in stats["ekin"]:
                         # read the trajectory file
                         frame = read_h5(f"{path_i}/traj_{str(t * every_n).zfill(5)}.h5")
-                        stats["ekin"][t] = 0.5 * (frame["u"] ** 2).sum() * dx**2
-                    ekin_sub.append(stats["ekin"][t])
+                        stats["ekin"][t * every_n] = 0.5 * (frame["u"] ** 2).sum() * dx**2
+                    ekin_sub.append(stats["ekin"][t * every_n])
                 ekin[name].append(np.array(ekin_sub))
 
-                if t not in stats["spectra"]:
+                if t * every_n not in stats["spectra"]:
                     frame = read_h5(f"{path_i}/traj_{str(t * every_n).zfill(5)}.h5")
-                    stats["spectra"][t] = computer.comp_spectrum(frame["r"], frame["u"])
+                    stats["spectra"][t * every_n] = computer.comp_spectrum(frame["r"], frame["u"])
                 # print(len(spectrum), len(ekin_sub))
-                spectra[name].append(stats["spectra"][t][1 : len(k_axis) + 1])
+                spectra[name].append(stats["spectra"][t * every_n][1 : len(k_axis) + 1])
 
                 # save the stats for this path
                 with open(stats_file, "wb") as f:
@@ -179,9 +179,12 @@ def plt_ekin_and_spectra(
             rlts.sort()  # sort by name to ensure order
 
             # compute stats for each rollout
+            do_dataset = "Dataset" not in ekin or len(ekin["Dataset"]) == 0
             for rlt_i in rlts:
                 rollout = pickle.load(open(os.path.join(path, rlt_i), "rb"))
                 for is_gt, name_ in zip([False, True], [name, "Dataset"]):
+                    if is_gt and not do_dataset:
+                        continue
                     is_sp = i < spectrum_num_plts
                     ek, sp = computer.get_ekin_and_spectrum(rollout, ekin_axis, is_sp, is_gt=is_gt)
                     ekin[name_].append(ek)
@@ -322,7 +325,7 @@ def plt_ekin_and_spectra(
     axs[1].set_xticklabels([f"{int(k)}" for k in axs[1].get_xticks()])
     axs[1].set_yscale("log")
     axs[1].set_ylim(1e-4, 2e0)
-    axs[1].legend(loc="lower left")
+    axs[0].legend(loc="lower left")
 
     for ax in axs:
         ax.grid()
@@ -341,7 +344,10 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
             # "1000_nsph1": "2025-02-08_02-47-01",
         }
     else:
-        raise NotImplementedError("Only every1 is set up for now.")
+        ckpts = {  # on every 10 step
+            "lag": "2025-06-15_23-15-04",
+            "lag_noisy": "2025-06-15_23-18-37",
+        }
 
     def rlt_path(ckpt_date, rlt_type):
         return os.path.join(root_logs, ckpt_date, "rlt", rlt_type)
@@ -474,6 +480,54 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
             r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = \mathbf{v}$ ) + NSPHtvf0005",
             r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = \mathbf{v}$ ) + NSPHtvf100",
         ]
+    elif experiment == "lag10_101":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path(ckpts["lag"], "101"),
+            rlt_path(ckpts["lag"], "101_nsph1"),
+            rlt_path(ckpts["lag"], "101_nsph1tvf1"),
+            rlt_path(ckpts["lag"], "101_gnn"),
+            rlt_path(ckpts["lag"], "101_gnn_nsph1"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = \mathbf{v}$)",
+            r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = \mathbf{v}$) + NSPH",
+            r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = \mathbf{v}$) + NSPHtvf1",
+            r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = f_{\theta}^{\mathbf{v}\to \mathbf{u}}(\mathbf{v})$)",
+            r"$\mathbf{v}\to \mathbf{u}$ ($\mathbf{u} = f_{\theta}^{\mathbf{v}\to \mathbf{u}}(\mathbf{v})$) + NSPH",
+        ]
+    elif experiment == "lag10_500":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path(ckpts["lag"], "500_rho"),
+            rlt_path(ckpts["lag"], "500_rho101"),
+            rlt_path(ckpts["lag"], "500_rho10"),
+            # rlt_path(ckpts["lag"], "500_rhotvf1"),
+            # rlt_path(ckpts["lag"], "500_rhotvf2"),
+            # rlt_path(ckpts["lag"], "500_rho_nu"),
+            # rlt_path(ckpts["lag"], "500_rho_artif1"),
+            # rlt_path(ckpts["lag"], "500_rho_sph2"),
+            # rlt_path(ckpts["lag_noisy"], "1999_nsph1"),
+            # rlt_path(ckpts["lag_noisy"], "1999_nsph1tvf1"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            r"$\mathbf{v}\to \mathbf{u}$ + rlx",
+            r"$\mathbf{v}\to \mathbf{u}$ + rlx101",
+            r"$\mathbf{v}\to \mathbf{u}$ + rlx10",
+            # r"$\mathbf{v}\to \mathbf{u}$ + rlx_tvf1",
+            # r"$\mathbf{v}\to \mathbf{u}$ + rlx_tvf2",
+            # r"$\mathbf{v}\to \mathbf{u}$ + rlx_nu",
+            # r"$\mathbf{v}\to \mathbf{u}$ + rlx_artif1",
+            # r"$\mathbf{v}\to \mathbf{u}$ + rlx_sph",
+            # r"$\mathbf{v}\to \mathbf{u}$ + noise + NSPH",
+            # r"$\mathbf{v}\to \mathbf{u}$ + noise + NSPHtvf1",
+        ]
     else:
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
@@ -500,3 +554,6 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
 # plt_ekin_and_spectra("lag_5001_v2u_nsph", every_n=1, step_last=5000, step_stride=100)
 # plt_ekin_and_spectra("lag_101_v2u_nsph1tvf", every_n=1, step_last=100, step_stride=10)
 # plt_ekin_and_spectra("lag_20000_v2u_nsph", every_n=1, step_last=19999, step_stride=100)
+
+# plt_ekin_and_spectra("lag10_101", every_n=10, step_last=100, step_stride=10)
+# plt_ekin_and_spectra("lag10_500", every_n=10, step_last=500, step_stride=10)
