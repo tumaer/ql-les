@@ -10,7 +10,7 @@ net:
   model_name: "gino" # gino, interp_fno
   isotropic_norm: false
   noise_std: 3.0e-4
-  dataset_path: ${data.data_dir}
+  metadata_path: ${data.data_dir}/metadata.json
   return_x_grid: false
   ### GINO kwargs
   in_gno_transform_type: linear

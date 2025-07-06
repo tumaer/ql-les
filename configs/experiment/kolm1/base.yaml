@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - override /data: kolm2d_every1_v2
+  - override /trainer: gpu
+  - override /vars: kolm2d
+  - override /callbacks: default
+  - override /logger: wandb
+
+model:
+  net:
+    metadata_path: ${data.data_dir}/metadata_every1.json
+
+seed: 12345

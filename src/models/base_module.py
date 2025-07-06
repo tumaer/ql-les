@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any, Dict, Tuple
 from functools import partial
 import time
@@ -26,7 +25,7 @@ class BaseSimulator(nn.Module):
         device,
         isotropic_norm,
         noise_std,
-        dataset_path,
+        metadata_path,
     ):
         super().__init__()
         self.model_name = model_name
@@ -34,7 +33,7 @@ class BaseSimulator(nn.Module):
         self.isotropic_norm = isotropic_norm
         self.noise_std = noise_std
 
-        self.metadata = load_metadata(Path(dataset_path))
+        self.metadata = load_metadata(metadata_path)
         self._boundaries = self.metadata["bounds"]
         self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._case = self.metadata["case"]

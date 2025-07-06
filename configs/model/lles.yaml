@@ -9,7 +9,7 @@ net:
   _partial_: true
   model_name: "lles"
   input_seq_length: ${vars.input_seq_length}
-  dataset_path: ${data.data_dir} # Path to the dataset
+  metadata_path: ${data.data_dir}/metadata.json
   noise_std: 3.0e-4
 
   # GNS specific parameters, not needed for LLES

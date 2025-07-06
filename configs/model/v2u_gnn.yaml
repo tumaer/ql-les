@@ -11,7 +11,7 @@ net:
   latent_dim: 64
   num_message_passing_steps: 5
   noise_std: 0.0
-  dataset_path: ${data.data_dir} # Path to the dataset
+  metadata_path: ${data.data_dir}/metadata.json
   isotropic_norm: false
   mlp_num_layers: 1
   mlp_hidden_dim: 64

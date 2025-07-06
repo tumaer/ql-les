@@ -14,7 +14,7 @@ net:
   noise_std: 0.0
   num_particle_types: 1
   particle_type_embedding_size: 0
-  dataset_path: ${data.data_dir} # Path to the dataset
+  metadata_path: ${data.data_dir}/metadata.json
   alpha_u: ${model.alpha_u}
   alpha_field: ${model.alpha_field}
   vel_solver: ${model.vel_solver}

@@ -31,7 +31,7 @@ class GNNSimulator(BaseSimulator):
         latent_dim,
         num_message_passing_steps,
         noise_std,
-        dataset_path,
+        metadata_path,
         num_particle_types,
         particle_type_embedding_size,
         device,
@@ -48,7 +48,7 @@ class GNNSimulator(BaseSimulator):
             device=device,
             isotropic_norm=isotropic_norm,
             noise_std=noise_std,
-            dataset_path=dataset_path,
+            metadata_path=metadata_path,
         )
 
         if alpha_u != 0:

@@ -21,6 +21,7 @@ class SPHDataModule(LightningDataModule):
         limit_train_batches: Optional[float] = None,
         overfit: bool = False,
         only_beginning: bool = False,
+        **dataset_kwargs,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -35,6 +36,7 @@ class SPHDataModule(LightningDataModule):
         self.overfit = overfit
         self.only_beginning = only_beginning
 
+        self.dataset_kwargs = dataset_kwargs
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
@@ -53,6 +55,7 @@ class SPHDataModule(LightningDataModule):
                 input_seq_length=self.input_seq_length,
                 extra_seq_length=self.max_pushforward_steps,
                 regime="train",
+                **self.dataset_kwargs,
             )
             if self.limit_train_batches is not None:
                 limited_len = self.batch_size * self.limit_train_batches
@@ -65,6 +68,7 @@ class SPHDataModule(LightningDataModule):
                 extra_seq_length=self.max_rollout_steps,
                 regime="inference",
                 only_beginning=self.only_beginning,
+                **self.dataset_kwargs,
             )
         elif stage == "test":
             self.test_dataset = H5Dataset(
@@ -74,6 +78,7 @@ class SPHDataModule(LightningDataModule):
                 extra_seq_length=self.max_rollout_steps,
                 regime="inference",
                 only_beginning=self.only_beginning,
+                **self.dataset_kwargs,
             )
         else:
             raise ValueError(f"Stage {stage} not recognized.")

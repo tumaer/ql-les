@@ -59,6 +59,8 @@ class H5Dataset(Dataset):
         extra_seq_length: int = 0,
         regime: str = "train",
         only_beginning: bool = False,
+        every_n: int = 1,
+        metadata_file: str = "metadata.json",
     ):
         """Initialize the dataset. If the dataset is not present, it is downloaded.
 
@@ -76,6 +78,8 @@ class H5Dataset(Dataset):
                 N-step MSE loss we are interested in, e.g. for best model checkpointing.
             regime: [train|inference] - used to determine the dataset slicing
             only_beginning: If True, there will be only one sample per trajectory.
+            every_n: slice every_n-th frame as consecutive frames for training. Assumes that the
+                dataset is storing every 1 frame.
         """
 
         if only_beginning:
@@ -98,6 +102,7 @@ class H5Dataset(Dataset):
         self.file_path = osp.join(dataset_path, split + ".h5")
         self.input_seq_length = input_seq_length
         self.split = split
+        self.every_n = every_n
 
         force_fn_path = osp.join(dataset_path, "force.py")
         if osp.exists(force_fn_path):
@@ -116,7 +121,7 @@ class H5Dataset(Dataset):
             self.external_force_fn = None
 
         # load dataset metadata
-        with open(osp.join(dataset_path, "metadata.json"), "r") as f:
+        with open(osp.join(dataset_path, metadata_file), "r") as f:
             self.metadata = json.loads(f.read())
 
         self.db_hdf5 = None
@@ -136,7 +141,7 @@ class H5Dataset(Dataset):
 
             self.subseq_length = input_seq_length + 1 + extra_seq_length
             samples_per_traj = (
-                self.sequence_length - self.subseq_length + 1
+                self.sequence_length - self.subseq_length + 1 - (every_n - 1)
             )  # number of trajectory samples for a given trajectory
 
             keylens = np.array([samples_per_traj for _ in range(len(self.traj_keys))])  #
@@ -150,9 +155,9 @@ class H5Dataset(Dataset):
             # Compute the number of splits per validation trajectory. If the length of
             # each trajectory is 1000, we want to compute a 20-step MSE, and
             # intput_seq_length=6, then we should split the trajectory into
-            # _split_valid_traj_into_n = 1000 // (20 + 6) chunks.
+            # _split_valid_traj_into_n = 1000 // ((20 + 6) * every_n) chunks.
             self.subseq_length = input_seq_length + extra_seq_length
-            self._split_valid_traj_into_n = self.sequence_length // self.subseq_length
+            self._split_valid_traj_into_n = self.sequence_length // (self.subseq_length * every_n)
             if only_beginning:
                 self._split_valid_traj_into_n = 1
 
@@ -206,19 +211,22 @@ class H5Dataset(Dataset):
 
         if self._split_valid_traj_into_n > 1:
             traj_idx = idx // self._split_valid_traj_into_n
-            slice_from = (idx % self._split_valid_traj_into_n) * self.subseq_length
-            slice_to = slice_from + self.subseq_length
+            slice_from = (idx % self._split_valid_traj_into_n) * self.subseq_length * self.every_n
+            slice_to = slice_from + self.subseq_length * self.every_n
         else:
             traj_idx = idx
             slice_from = 0
-            slice_to = self.subseq_length
+            slice_to = self.subseq_length * self.every_n
 
         # get a pointer to the trajectory. That is not yet the real trajectory.
         traj = self.db_hdf5[f"{self.traj_keys[traj_idx]}"]
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load and transpose the trajectory
-        pos_input = torch.tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
+        # Take every_n-th frame from the sliced window
+        pos_input = torch.tensor(
+            traj_pos[slice_from : slice_to : self.every_n].transpose((1, 0, 2))
+        )
 
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
 
@@ -227,8 +235,10 @@ class H5Dataset(Dataset):
         # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = torch.tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
-            position_dict["u"] = u_input_and_target
+            u_input_and_target = traj_u_vel[slice_from : slice_to : self.every_n].transpose(
+                (1, 0, 2)
+            )
+            position_dict["u"] = torch.tensor(u_input_and_target)
 
         return position_dict
 
@@ -241,6 +251,7 @@ class H5Dataset(Dataset):
         if traj_idx != 0:
             el_idx = idx - self._keylen_cumulative[traj_idx - 1]
         assert el_idx >= 0
+        el_idx_to = el_idx + self.subseq_length * self.every_n
 
         # open the database file
         self.db_hdf5 = self._open_hdf5()
@@ -250,7 +261,7 @@ class H5Dataset(Dataset):
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load only a slice of the positions. Now, this is an array in memory.
-        pos_input_and_target = traj_pos[el_idx : el_idx + self.subseq_length]
+        pos_input_and_target = traj_pos[el_idx : el_idx_to : self.every_n]
         pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))
 
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
@@ -260,9 +271,8 @@ class H5Dataset(Dataset):
         # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = traj_u_vel[el_idx : el_idx + self.subseq_length]
-            u_input_and_target = torch.tensor(u_input_and_target.transpose((1, 0, 2)))
-            position_dict["u"] = u_input_and_target
+            u_input_and_target = traj_u_vel[el_idx : el_idx_to : self.every_n]
+            position_dict["u"] = torch.tensor(u_input_and_target.transpose((1, 0, 2)))
 
         return position_dict
 
