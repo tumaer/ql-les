@@ -343,7 +343,7 @@ class GNNSimulator(BaseSimulator):
             )
             return next_position, new_u_velocity
         elif self.v2u_solver != "none":
-            u_velocity = kwargs["u_velocity"]
+            # u_velocity = kwargs["u_velocity"]
             node_features, edge_index, e_features = self._build_graph_from_raw(
                 current_positions,
                 n_particles_per_trajectory,
@@ -360,8 +360,7 @@ class GNNSimulator(BaseSimulator):
                     pbc,
                     n_part_per_traj=n_particles_per_trajectory,
                 )
-
-            if self.v2u_solver == "gnn":
+            elif self.v2u_solver == "gnn":
                 next_position, new_v_velocity = self._decoder_postprocessor(
                     a_v_pred,
                     current_positions,

@@ -528,6 +528,57 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
             # r"$\mathbf{v}\to \mathbf{u}$ + noise + NSPH",
             # r"$\mathbf{v}\to \mathbf{u}$ + noise + NSPHtvf1",
         ]
+    elif experiment == "1lag_101":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path("2025-07-06_06-19-37", "101"),
+            rlt_path("2025-07-06_11-05-20", "101"),
+            rlt_path("2025-07-06_11-14-14", "101"),
+            rlt_path("2025-07-06_11-22-57", "101"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            "lag",
+            "u2v_gns",
+            "gns_simple",
+            "gino",
+        ]
+    elif experiment == "1lag_1001":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path("2025-07-06_06-19-37", "1001"),
+            rlt_path("2025-07-06_11-05-20", "1001"),
+            rlt_path("2025-07-06_11-14-14", "1001"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            "lag",
+            "u2v_gns",
+            "gns_simple",
+        ]
+    elif experiment == "1lag_1001_nsph1":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path("2025-07-06_06-19-37", "1001_nsph1"),
+            rlt_path("2025-07-06_11-05-20", "1001_nsph1"),
+            rlt_path("2025-07-06_11-05-20", "1001_nsph1_nu0001"),
+            rlt_path("2025-07-06_11-05-20", "1001_nsph1_nu001"),
+            rlt_path("2025-07-06_11-14-14", "1001_nsph1"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            "lag",
+            "u2v_gns",
+            "u2v_gns_nu0001",
+            "u2v_gns_nu001",
+            "gns_simple",
+        ]
     else:
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
@@ -557,3 +608,8 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
 
 # plt_ekin_and_spectra("lag10_101", every_n=10, step_last=100, step_stride=10)
 # plt_ekin_and_spectra("lag10_500", every_n=10, step_last=500, step_stride=10)
+
+### new dataset kolm1:
+# plt_ekin_and_spectra("1lag_101", every_n=1, step_last=100, step_stride=1)
+# plt_ekin_and_spectra("1lag_1001", every_n=1, step_last=1000, step_stride=50)
+# plt_ekin_and_spectra("1lag_1001_nsph1", every_n=1, step_last=1000, step_stride=50)

@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /experiment/kolm1/base
+  - override /model: gns
+
+model:
+  _target_: src.models.gino_module.GINOLitModule
+  net:
+    _target_: src.models.gino_module.GINOSimulator
+    noise_std: 0.0 # TODO: ablate
+  vel_solver: ""
+
+logger:
+  wandb:
+    project: "kolm1"
+
+tags: ["u2v_gns"]

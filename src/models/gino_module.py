@@ -4,10 +4,11 @@ import warnings
 
 import torch
 from torch import Tensor, nn
-from neuralop.models.gino import GINO
-from neuralop.models.fno import FNO
+from neuraloperator.neuralop.models.gino import GINO
+from neuraloperator.neuralop.models.fno import FNO
 
 from src.models.base_module import BaseSimulator, BaseLitModule
+from src.models.components.gns import EncodeProcessDecode
 from src.utils.metrics import particle_mse
 from src.utils.eval_utils import eval_rollout
 from src.utils.nbrs_utils import gen_grid_points
@@ -105,7 +106,7 @@ class GINOSimulator(BaseSimulator):
         device: str,
         isotropic_norm: bool,
         noise_std: float,
-        dataset_path: str,
+        metadata_path: str,
         # v_solver: str, # "rlx", "neural", "hybrid"
         return_x_grid: bool = False,  # applies only to InterpFNO and during rollout
         **gino_kwargs,
@@ -115,7 +116,7 @@ class GINOSimulator(BaseSimulator):
             device=device,
             isotropic_norm=isotropic_norm,
             noise_std=noise_std,
-            dataset_path=dataset_path,
+            metadata_path=metadata_path,
         )
 
         box_size = [x[1] for x in self._boundaries]
@@ -129,7 +130,7 @@ class GINOSimulator(BaseSimulator):
             print("Warning: Tested only on batch size 1!")
             assert return_x_grid is False, "return_x_grid must be False for GINO model"
 
-            self.gino = GINO(
+            self.network = GINO(
                 in_channels=self.dim,  # input past u
                 out_channels=self.dim,  # directly output u
                 gno_coord_dim=self.dim,
@@ -144,7 +145,7 @@ class GINOSimulator(BaseSimulator):
             # remove the prefix "fno_" from the keys in gino_kwargs
             fno_kwargs = {k[4:]: v for k, v in gino_kwargs.items() if k.startswith("fno_")}
             nbrs_kwargs = {k[5:]: v for k, v in gino_kwargs.items() if k.startswith("nbrs_")}
-            self.gino = InterpFNO(
+            self.network = InterpFNO(
                 # in_channels=self.dim,  # input past u
                 out_channels=self.dim,  # directly output u
                 is_periodic=any(self._pbc),
@@ -154,6 +155,18 @@ class GINOSimulator(BaseSimulator):
                 **nbrs_kwargs,
                 **fno_kwargs,
             )
+        elif model_name == "gns":
+            self.network = EncodeProcessDecode(
+                node_in=self.dim,  # input past u
+                node_out=self.dim,  # output acceleration_u
+                edge_in=self.dim + 1,  # displacement vector and its length
+                latent_dim=gino_kwargs["latent_dim"],
+                num_message_passing_steps=gino_kwargs["num_message_passing_steps"],
+                mlp_num_layers=gino_kwargs["mlp_num_layers"],
+                mlp_hidden_dim=gino_kwargs["mlp_hidden_dim"],
+                alpha_u=0.0,
+            )
+            self._num_particle_types = 1  # for compatibility with _build_graph_from_raw
         else:
             raise ValueError(f"Model name {model_name} not recognized.")
 
@@ -193,18 +206,31 @@ class GINOSimulator(BaseSimulator):
             )
 
         # Evolve u
-        most_recent_u_velocity = self._norm(most_recent_u_velocity, "uu")
-        new_u_velocity_norm = self.gino(
-            input_geom=most_recent_position,  # (N, D)
-            latent_queries=self.latent_points,  # (G, G, D)
-            output_queries=new_position,  # (M, D)
-            x=most_recent_u_velocity[None, ...],  # (B, N, FNO_IN_CHANNELS)
-            x_grid=kwargs.get("x_grid", None),  # (B, D, N,...N)
-            return_x_grid=self.return_x_grid,
-        )
+        most_recent_u_velocity_norm = self._norm(most_recent_u_velocity, "uu")
+        if self.model_name in ["gino", "interp_fno"]:
+            new_u_velocity_norm = self.network(
+                input_geom=most_recent_position,  # (N, D)
+                latent_queries=self.latent_points,  # (G, G, D)
+                output_queries=new_position,  # (M, D)
+                x=most_recent_u_velocity_norm[None, ...],  # (B, N, FNO_IN_CHANNELS)
+                x_grid=kwargs.get("x_grid", None),  # (B, D, N,...N)
+                return_x_grid=self.return_x_grid,
+            )
+        elif self.model_name == "gns":
+            node_features, edge_index, edge_features = self._build_graph_from_raw(
+                position_sequence=most_recent_position.unsqueeze(1),  # (N, 1, D)
+                n_particles_per_trajectory=n_particles_per_trajectory,  # (B,)
+                u_velocity=most_recent_u_velocity_norm,  # (N, D)
+                node_features_type=["u"],
+            )
+            u_acc = self.network(node_features, edge_index, edge_features)
+            new_u_velocity = most_recent_u_velocity + self._denorm(u_acc, "ua")
+            return new_position, new_u_velocity
+
         if self.return_x_grid:  # optional with interp_fno mode
-            new_u_velocity_norm, u_grid = new_u_velocity_norm
+            new_u_velocity_norm, u_grid_norm = new_u_velocity_norm
             new_u_velocity = self._denorm(new_u_velocity_norm, "uu")
+            u_grid = self._denorm(u_grid_norm, "uu")
             return new_position, new_u_velocity, u_grid
         else:
             # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
@@ -230,6 +256,7 @@ class GINOLitModule(BaseLitModule):
         num_rollout_steps: int = 1,
         active_metrics: Dict[str, Any] = None,
         metric_space: Dict[str, str] = "norm",
+        **kwargs: Any,
     ) -> None:
         super().__init__(
             net=net,
@@ -261,7 +288,7 @@ class GINOLitModule(BaseLitModule):
                 warnings.warn(
                     f"Saved instance of {self.__class__} has no stored version attribute."
                 )
-            if saved_version != self.net.gino._version:
+            if saved_version != self.net.network._version:
                 warnings.warn(
                     f"Attempting to load a {self.__class__} of version {saved_version},"
                     f"But current version of {self.__class__} is {saved_version}"
@@ -270,42 +297,54 @@ class GINOLitModule(BaseLitModule):
     def model_step(self, batch: Any) -> Tensor:
         """Forward pass and loss calculation."""
 
-        u_in = batch.enc_u[:, -1][None, ...]
-        u_in += torch.randn(u_in.shape, device=u_in.device) * self.net.noise_std
+        u_in = batch.enc_u[:, -1]
+        u_in_norm = self.net._norm(u_in, "uu")
+        if self.net.noise_std > 0:
+            u_in_norm += torch.randn(u_in.shape, device=u_in.device) * self.net.noise_std
 
         target_u_norm = self.net._norm(batch.target_u.squeeze(), "uu")
 
         if self.net.model_name == "gino":
             # Train GINO on `u`
-            u_pred = self.net.gino(
+            u_pred_norm = self.net.network(
                 input_geom=batch.enc_pos[:, -1],  # (N, D)
                 latent_queries=self.net.latent_points,  # (G, G, D)
                 output_queries=batch.target_pos[:, 0],  # (M, D)
-                x=u_in,  # (B, N, FNO_IN_CHANNELS)
+                x=u_in_norm[None, ...],  # (B, N, FNO_IN_CHANNELS)
             )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
         elif self.net.model_name == "interp_fno":
             # Train InterpFNO on `u`
-            _, u_pred = self.net.gino(
+            _, u_pred_norm = self.net.network(
                 input_geom=batch.enc_pos[:, -1],  # (N, D)
                 latent_queries=self.net.latent_points,  # (G, G, D)
                 output_queries=batch.target_pos[:, 0],  # (M, D)
-                x=u_in,  # (B, N, FNO_IN_CHANNELS)
+                x=u_in_norm[None, ...],  # (B, N, FNO_IN_CHANNELS)
                 return_x_grid=True,
             )
             # interpolate target to same grid as FNO grid
             r_latent_queries = self.net.latent_points.reshape(-1, self.net.dim)
-            target_u_norm = self.net.gino.interpolate(
+            target_u_norm = self.net.network.interpolate(
                 r=batch.target_pos[:, 0],
                 r_target=r_latent_queries,
                 f=target_u_norm,
             )
             # reshape predictions from grid to points
-            u_pred = u_pred.squeeze(0)
-            u_pred = u_pred.permute(*torch.arange(u_pred.ndim - 1, -1, -1))
-            u_pred = u_pred.reshape(-1, u_pred.shape[-1])  # (N,... N, D) -> (N*N..., D)
+            u_pred_norm = u_pred_norm.squeeze(0)
+            u_pred_norm = u_pred_norm.permute(*torch.arange(u_pred_norm.ndim - 1, -1, -1))
+            # (N,... N, D) -> (N*N..., D)
+            u_pred_norm = u_pred_norm.reshape(-1, u_pred_norm.shape[-1])
+        elif self.net.model_name == "gns":
+            node_features, edge_index, edge_features = self.net._build_graph_from_raw(
+                position_sequence=batch.enc_pos[:, -1:],  # (N, 1, D)
+                n_particles_per_trajectory=batch["n_particles_per_trajectory"],  # (B,)
+                u_velocity=u_in_norm,  # (N, D)
+                node_features_type=["u"],
+            )
+            u_acc_norm = self.net.network(node_features, edge_index, edge_features)
+            u_pred_norm = self.net._norm(u_in + self.net._denorm(u_acc_norm, "ua"), "uu")
 
         non_kinematic_mask = (batch.particle_types != 3).clone().detach()
-        loss_u = particle_mse(u_pred, target_u_norm, non_kinematic_mask)
+        loss_u = particle_mse(u_pred_norm, target_u_norm, non_kinematic_mask)
         return loss_u
 
     def validation_step(self, batch: Tuple[Tensor, Tensor], **kwargs) -> Dict[str, Tensor]:

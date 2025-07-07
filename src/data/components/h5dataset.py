@@ -235,10 +235,9 @@ class H5Dataset(Dataset):
         # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = traj_u_vel[slice_from : slice_to : self.every_n].transpose(
-                (1, 0, 2)
+            position_dict["u"] = torch.tensor(
+                traj_u_vel[slice_from : slice_to : self.every_n].transpose((1, 0, 2))
             )
-            position_dict["u"] = torch.tensor(u_input_and_target)
 
         return position_dict
 

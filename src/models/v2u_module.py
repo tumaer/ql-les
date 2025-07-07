@@ -13,7 +13,7 @@ class V2USimulator(BaseSimulator):
         latent_dim: int,
         num_message_passing_steps: int,
         noise_std: float,
-        dataset_path: str,
+        metadata_path: str,
         device: str,
         isotropic_norm=False,
         mlp_num_layers: int = 1,
@@ -24,7 +24,7 @@ class V2USimulator(BaseSimulator):
             device=device,
             isotropic_norm=isotropic_norm,
             noise_std=noise_std,
-            dataset_path=dataset_path,
+            metadata_path=metadata_path,
         )
         self._num_particle_types = 1
 
