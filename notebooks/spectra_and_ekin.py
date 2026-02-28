@@ -111,8 +111,8 @@ def plt_ekin_and_spectra(
         save_suffix (str): Suffix for saving the plots.
     """
 
-    assert every_n in [1, 10], "Only every_n=1 or every_n=10 is supported"
-    paths, names = get_paths_names(experiment, every_n == 1)
+    # assert every_n in [1, 10], "Only every_n=1 or every_n=10 is supported"
+    paths, names = get_paths_names(experiment, every_n)
     assert len(paths) == len(names), "Number of paths and names must match"
     ekin_axis = np.arange(0, step_last + 1, step_stride)
 
@@ -336,14 +336,14 @@ def plt_ekin_and_spectra(
     plt.close()
 
 
-def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", data_root="."):
+def get_paths_names(experiment, is_every=1, root_logs="./logs/train/runs", data_root="."):
     """Get paths and names for the given experiment name. Used by `plt_ekin_and_spectra`."""
-    if is_every1:
+    if is_every == 1:
         ckpts = {  # on every 1 step
             "lag": "2025-06-02_03-21-52",
             # "1000_nsph1": "2025-02-08_02-47-01",
         }
-    else:
+    elif is_every == 10:
         ckpts = {  # on every 10 step
             "lag": "2025-06-15_23-15-04",
             "lag_noisy": "2025-06-15_23-18-37",
@@ -579,6 +579,17 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
             "u2v_gns_nu001",
             "gns_simple",
         ]
+    elif experiment == "1lag_every100":
+        paths = [
+            f"{data_root}/data/2D_KOLM_4096_20kevery10",
+            sph_paths,
+            rlt_path("2025-07-07_11-43-25", "11_nsph5"),
+        ]
+        names = [
+            "Dataset",  # used only to get the metadata
+            "SPH",
+            "lag",
+        ]
     else:
         paths = [
             f"{data_root}/data/2D_KOLM_4096_200kevery1",
@@ -593,7 +604,7 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
             "Simple-Base",
             # "TVF-Base",
             # r"Simple-$\mathbf{u}$",
-            # "TVF-Rlx" if is_every1 else "TVF-Rlx-Closure",
+            # "TVF-Rlx" if is_every==1 else "TVF-Rlx-Closure",
         ]
 
     return paths, names
@@ -613,3 +624,6 @@ def get_paths_names(experiment, is_every1=True, root_logs="./logs/train/runs", d
 # plt_ekin_and_spectra("1lag_101", every_n=1, step_last=100, step_stride=1)
 # plt_ekin_and_spectra("1lag_1001", every_n=1, step_last=1000, step_stride=50)
 # plt_ekin_and_spectra("1lag_1001_nsph1", every_n=1, step_last=1000, step_stride=50)
+
+### kolm100
+plt_ekin_and_spectra("1lag_every100", every_n=100, step_last=10, step_stride=1)

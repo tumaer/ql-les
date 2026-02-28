@@ -140,9 +140,8 @@ class H5Dataset(Dataset):
             # trajectory becomes:
 
             self.subseq_length = input_seq_length + 1 + extra_seq_length
-            samples_per_traj = (
-                self.sequence_length - self.subseq_length + 1 - (every_n - 1)
-            )  # number of trajectory samples for a given trajectory
+            # number of training samples per dataset trajectory
+            samples_per_traj = self.sequence_length - (self.subseq_length - 1) * every_n
 
             keylens = np.array([samples_per_traj for _ in range(len(self.traj_keys))])  #
             self._keylen_cumulative = np.cumsum(keylens).tolist()

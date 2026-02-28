@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - override /data: kolm2d_every1_v2
+  - override /data: kolm2d_every100_v2
   - override /trainer: gpu
   - override /vars: kolm2d
   - override /callbacks: default
@@ -9,5 +9,9 @@ defaults:
 model:
   net:
     metadata_path: ${data.data_dir}/${data.metadata_file}
+
+logger:
+  wandb:
+    project: "kolm100"
 
 seed: 12345
