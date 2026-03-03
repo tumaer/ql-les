@@ -19,6 +19,30 @@
 # python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag50 \
 #   data.name=kolm50 data.every_n=50 data.metadata_file=metadata_every50.json
 
+#### Train with noise
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag10 \
+#   data.name=kolm10 data.every_n=10 data.metadata_file=metadata_every10.json \
+#   model.net.noise_std=0.0001
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag10 \
+#   data.name=kolm10 data.every_n=10 data.metadata_file=metadata_every10.json \
+#   model.net.noise_std=0.0003
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag10 \
+#   data.name=kolm10 data.every_n=10 data.metadata_file=metadata_every10.json \
+#   model.net.noise_std=0.001
+
+#### Train with 5 history steps
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag10 \
+#   data.name=kolm10 data.every_n=10 data.metadata_file=metadata_every10.json \
+#   vars.input_seq_length=6
+
+#### Train with 5 history steps and noise
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag10 \
+#   data.name=kolm10 data.every_n=10 data.metadata_file=metadata_every10.json \
+#   model.net.noise_std=0.0001 vars.input_seq_length=6
+# python src/train.py experiment=kolm100/lag.yaml +logger.wandb.name=lag50 \
+#   data.name=kolm50 data.every_n=50 data.metadata_file=metadata_every50.json \
+#   model.net.noise_std=0.0001 vars.input_seq_length=6
+
 #### Inference
 run_basic() {
     python src/eval.py ckpt_path=logs/train/runs/"$1"/checkpoints/last.ckpt \
@@ -54,5 +78,31 @@ run_basic() {
 # run_basic "2026-03-01_01-43-27" 201_nsph3 3 201 model.v2u_solver=same # 50th
 # run_basic "2026-03-01_01-43-06" 501_nsph3 3 501 model.v2u_solver=same # 20th
 # run_basic "2026-03-01_02-03-36" 1001_nsph3 3 1001 model.v2u_solver=same # 10th
+
+# Runs with noise on every 10th
+
+# # 2000 steps, no nsph
+# run_basic "2026-03-02_01-42-18" 201_00001 0 201 model.v2u_solver=same # std=0.0001
+# run_basic "2026-03-02_01-43-03" 201_00003 0 201 model.v2u_solver=same # std=0.0003
+# run_basic "2026-03-02_01-43-30" 201_0001 0 201 model.v2u_solver=same # std=0.001
+# # 10000 steps
+# run_basic "2026-03-02_01-42-18" 1001_n3_00001 3 1001 model.v2u_solver=same # std=0.0001
+# run_basic "2026-03-02_01-43-03" 1001_n3_00003 3 1001 model.v2u_solver=same # std=0.0003
+# run_basic "2026-03-02_01-43-30" 1001_n3_0001 3 1001 model.v2u_solver=same # std=0.001
+
+# Runs with 5 historic steps
+
+# # 2000 steps, no nsph, on every 10th
+# run_basic "2026-03-02_09-32-50" 201_h5 0 201 model.v2u_solver=same # std=0, h5
+# run_basic "2026-03-02_14-52-38" 201_00001_h5 0 201 model.v2u_solver=same # std=0.0001, h5
+# # 10000 steps, with nsph, on every 10th
+# run_basic "2026-03-02_09-32-50" 1001_n3_h5 3 1001 model.v2u_solver=same
+# run_basic "2026-03-02_14-52-38" 1001_n3_00001_h5 3 1001 model.v2u_solver=same
+# 2000 steps, no nsph, on every 50th
+# run_basic "2026-03-02_23-14-55" 41_h5 0 41 model.v2u_solver=same # std=00001, h5
+# # 10000 steps, with nsph, on every 50th
+# run_basic "2026-03-02_23-14-55" 201_n1_h5 1 201 model.v2u_solver=same # std=00001, h5
+# run_basic "2026-03-02_23-14-55" 201_n3_h5 3 201 model.v2u_solver=same # std=00001, h5
+# run_basic "2026-03-02_23-14-55" 201_n5_h5 5 201 model.v2u_solver=same # std=00001, h5
 
 # python notebooks/everyn.py

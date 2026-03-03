@@ -153,11 +153,77 @@ def get_paths(name):
         fig_suffix = "nsph3-10k"
         slices = [2, 5, 10]
         # from best to worst: names=10->20->50
+    elif name == "everyn_noise-2k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "201"),
+            rlt_path("2026-03-02_01-42-18", "201_00001"),
+            rlt_path("2026-03-02_01-43-03", "201_00003"),
+            rlt_path("2026-03-02_01-43-30", "201_0001"),
+        ]
+        names = ["10_0-2k", "10_00001-2k", "10_00003-2k", "10_0001-2k"]
+        fig_suffix = "noise-2k"
+        slices = [10, 10, 10, 10]
+        # std=0.0001 does best, and no noise worst
+    elif name == "everyn_n3_noise-10k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "1001_nsph3"),
+            rlt_path("2026-03-02_01-42-18", "1001_n3_00001"),
+            rlt_path("2026-03-02_01-43-03", "1001_n3_00003"),
+            rlt_path("2026-03-02_01-43-30", "1001_n3_0001"),
+        ]
+        names = ["10_n3-10k", "10_n3_00001-10k", "10_n3_00003-10k", "10_n3_0001-10k"]
+        fig_suffix = "n3_noise-10k"
+        slices = [10, 10, 10, 10]
+        # no noise stays most stable; very small noise helps mid-term, but then explodes
+    elif name == "everyn_h5-2k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "201"),
+            rlt_path("2026-03-02_09-32-50", "201_h5"),
+            rlt_path("2026-03-02_14-52-38", "201_00001_h5"),
+        ]
+        names = ["10_0-2k", "10_0_h5-2k", "10_00001_h5-2k"]
+        fig_suffix = "noise_h5-2k"
+        slices = [10, 10, 10]
+        # until step=600, 00001_h5 is best. 5 steps w/o noise is worst.
+    elif name == "everyn_n3_h5-10k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "1001_nsph3"),
+            rlt_path("2026-03-02_09-32-50", "1001_n3_h5"),
+            rlt_path("2026-03-02_14-52-38", "1001_n3_00001_h5"),
+        ]
+        names = ["10_n3-10k", "10_n3_0_h5-10k", "10_n3_00001_h5-10k"]
+        fig_suffix = "noise_n3_h5-10k"
+        slices = [10, 10, 10]
+        # 1001_nsph3 is best.
+    elif name == "everyn_h5_e50-2k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "201"),
+            rlt_path("2026-03-01_01-43-27", "41"),
+            rlt_path("2026-03-02_23-14-55", "41_h5"),
+        ]
+        names = ["10_0", "50_0", "50_00001_h5"]
+        fig_suffix = "h5_e50-2k"
+        slices = [10, 2, 2]
+        # last one does best until middle, them blows up
+    elif name == "everyn_n3_h5_e50-2k":
+        paths = [
+            rlt_path("2026-03-01_02-03-36", "1001_nsph3"),
+            rlt_path("2026-03-01_01-43-27", "201_nsph3"),
+            rlt_path("2026-03-02_23-14-55", "201_n1_h5"),
+            rlt_path("2026-03-02_23-14-55", "201_n3_h5"),
+            rlt_path("2026-03-02_23-14-55", "201_n5_h5"),
+        ]
+        names = ["10_n3", "50_n3_0", "50_n1_00001_h5", "50_n3_00001_h5", "50_n5_00001_h5"]
+        fig_suffix = "h5_n3-10k"
+        slices = [10, 2, 2, 2, 2]
+        # 1001_nsph3 is best.
+    else:
+        raise ValueError(f"name={name} not supported")
 
     return paths, names, fig_suffix, slices
 
 
-paths, names, fig_suffix, slices = get_paths("everyn_nsph3-10k")
+paths, names, fig_suffix, slices = get_paths("everyn_n3_h5_e50-2k")
 plt_ekin(paths, names, fig_suffix)
 for i, (slice_n, name) in enumerate(zip(slices, names)):
     animate_rlt(paths[i], slice_n, name, 0)
