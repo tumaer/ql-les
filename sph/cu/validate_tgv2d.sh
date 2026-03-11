@@ -13,17 +13,17 @@ set -e
 source /usr/local/cuda-12.1.sh
 
 mkdir -p build
-nvcc -O3 -std=c++17 tgv_cuda.cu -o build/tgv_cuda
+nvcc -O3 -std=c++17 solver.cu -o build/solver
 
 # Step 1: relaxation pass
-./build/tgv_cuda --config tgv_cuda_init.conf
-python tgv2d_init.py
+./build/solver --config cfg/tgv2d_init.conf
+python init_u.py --type tgv2d --src "res/tgv2d_init/state_step_00006000.bin"
 
 # Step 2: production runs
-./build/tgv_cuda --config tgv_cuda_tvf.conf
-./build/tgv_cuda --config tgv_cuda_notvf.conf
+./build/solver --config cfg/tgv2d_tvf.conf
+./build/solver --config cfg/tgv2d_notvf.conf
 
 # Step 3: analysis
-python analyse.py res_tgv2d_init
-python analyse.py res_tgv2d_tvf
-python analyse.py res_tgv2d_notvf
+python analyse.py --type tgv2d --path res/tgv2d_init
+python analyse.py --type tgv2d --path res/tgv2d_tvf
+python analyse.py --type tgv2d --path res/tgv2d_notvf

@@ -1,20 +1,16 @@
-// Single-GPU SPH TGV simulation in C++/CUDA.
+// Single-GPU SPH simulation in C++/CUDA.
 //
-// Supports 2D and 3D periodic Taylor-Green Vortex via a single
+// Supports 2D and 3D periodic SPH simulations via a single
 // template <int DIM> class / kernel set.  Select dimension in the
 // config file with  dim = 2  (default) or  dim = 3.
 //
 // Build:
-//   nvcc -O3 -std=c++17 tgv_cuda.cu -o build/tgv_cuda
+//   nvcc -O3 -std=c++17 solver.cu -o build/solver
 //
-// Run example (2D):
-//   ./tgv_cuda --config tgv_cuda_tvf.conf
-// Run example (3D):
-//   ./tgv_cuda --config tgv_cuda_3d.conf
+// Run example:
+//   ./solver --config cfg/case.conf
 //
 // NOTE: saved state files (.bin) now use Vec3 (double3) for both 2D and 3D.
-// Old 2D state files written by the previous Vec2-based code are not
-// compatible and must be regenerated.
 
 #include <cuda_runtime.h>
 
@@ -34,6 +30,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -322,7 +319,7 @@ struct SpeedNorm {
 // ─── unified simulation class ────────────────────────────────────────────────
 
 template <int DIM>
-class TgvSph {
+class SphSolver {
 public:
     struct Params {
         int  nx          = 512;
@@ -334,7 +331,8 @@ public:
         Real tvf_factor  = 1.0;
         int  print_every = 200;
         int  save_every  = 0;
-        std::string save_dir        = "tgv_cuda_out";
+        Real noise_std_factor = 0.0;
+        std::string save_dir        = "res/out";
         std::string init_state_file = "";
     };
 
@@ -371,6 +369,7 @@ public:
             else if (key == "tvf_factor")      p.tvf_factor  = std::stod(val);
             else if (key == "print_every")     p.print_every = std::stoi(val);
             else if (key == "save_every")      p.save_every  = std::stoi(val);
+            else if (key == "noise_std_factor") p.noise_std_factor = std::stod(val);
             else if (key == "save_dir")        p.save_dir    = val;
             else if (key == "init_state_file") p.init_state_file = val;
             else throw std::runtime_error("Unknown config key: " + key);
@@ -378,7 +377,7 @@ public:
         return p;
     }
 
-    explicit TgvSph(const Params& p)
+    explicit SphSolver(const Params& p)
         : params_(p)
         , dx_(p.L / p.nx)
         , rho_ref_(1.0)
@@ -401,7 +400,7 @@ public:
         open_outputs();
     }
 
-    ~TgvSph() {
+    ~SphSolver() {
         if (diag_csv_.is_open()) diag_csv_.close();
         release();
     }
@@ -412,7 +411,7 @@ public:
         int grid_cells = (n_cells_ + 255) / 256;
         const auto t0  = std::chrono::steady_clock::now();
 
-        std::cout << (DIM == 2 ? "2D" : "3D") << " SPH TGV: N=" << n_
+        std::cout << (DIM == 2 ? "2D" : "3D") << " SPH: N=" << n_
                   << " particles, nx=" << params_.nx
                   << ", cells_per_dim=" << cells_per_dim_
                   << ", total_cells=" << n_cells_ << "\n";
@@ -515,6 +514,25 @@ private:
             init_tgv_kernel<DIM><<<(n_ + 255) / 256, 256>>>(
                 d_pos_, d_vel_, params_.nx, params_.L, dx_);
             CUDA_CHECK(cudaDeviceSynchronize());
+            if (params_.noise_std_factor > 0.0) {
+                const Real noise_std = params_.noise_std_factor * dx_;
+                std::vector<Vec3> h_pos(n_);
+                CUDA_CHECK(cudaMemcpy(h_pos.data(), d_pos_, sizeof(Vec3) * n_,
+                                      cudaMemcpyDeviceToHost));
+                std::mt19937_64 rng(42);
+                std::normal_distribution<Real> dist(0.0, noise_std);
+                auto wrap = [](Real x, Real L) { return x - std::floor(x / L) * L; };
+                for (int i = 0; i < n_; ++i) {
+                    h_pos[i].x = wrap(h_pos[i].x + dist(rng), params_.L);
+                    h_pos[i].y = wrap(h_pos[i].y + dist(rng), params_.L);
+                    if constexpr (DIM == 3)
+                        h_pos[i].z = wrap(h_pos[i].z + dist(rng), params_.L);
+                }
+                CUDA_CHECK(cudaMemcpy(d_pos_, h_pos.data(), sizeof(Vec3) * n_,
+                                      cudaMemcpyHostToDevice));
+                std::cout << "Applied position noise: std=" << noise_std
+                          << " (noise_std_factor=" << params_.noise_std_factor << ")\n";
+            }
             return;
         }
 
@@ -604,12 +622,12 @@ private:
 }  // namespace minimal_sph
 
 int main(int argc, char** argv) {
-    std::string conf_path = "tgv_cuda.conf";
+    std::string conf_path = "case.conf";
     if (argc >= 2) {
         if (std::strcmp(argv[1], "--config") == 0) {
             if (argc < 3) {
                 std::cerr << "Missing path after --config\n"
-                          << "Usage: ./tgv_cuda [--config path]\n";
+                          << "Usage: ./solver [--config path]\n";
                 return 1;
             }
             conf_path = argv[2];
@@ -633,17 +651,17 @@ int main(int argc, char** argv) {
 
     try {
         if (dim == 3) {
-            using Sim = minimal_sph::TgvSph<3>;
+            using Sim = minimal_sph::SphSolver<3>;
             Sim sim(Sim::from_conf(conf_path));
             sim.run();
         } else {
-            using Sim = minimal_sph::TgvSph<2>;
+            using Sim = minimal_sph::SphSolver<2>;
             Sim sim(Sim::from_conf(conf_path));
             sim.run();
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n"
-                  << "Usage: ./tgv_cuda [--config path]\n";
+                  << "Usage: ./solver [--config path]\n";
         return 1;
     }
 

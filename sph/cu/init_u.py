@@ -9,30 +9,46 @@ as ``relaxed_state.bin`` for use as the starting point of production runs.
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 
 import numpy as np
 
 from utils import load_state, write_state
 
 
-def tgv_velocity(x: np.ndarray) -> np.ndarray:
-    """Return analytic 2-D TGV velocity at positions *x* (L=1 domain).
-
-    Accepts arrays of shape (n, 2) or (n, 3); the z-column is left as zero.
-    """
+def tgv2d_u(x: np.ndarray) -> np.ndarray:
+    """Return analytic 2-D TGV velocity at positions *x* (L=1 domain)."""
     u = np.zeros_like(x)
     u[:, 0] = -np.cos(2.0 * np.pi * x[:, 0]) * np.sin(2.0 * np.pi * x[:, 1])
     u[:, 1] = +np.sin(2.0 * np.pi * x[:, 0]) * np.cos(2.0 * np.pi * x[:, 1])
     return u
 
 
+def tgv3d_u(x: np.ndarray) -> np.ndarray:
+    """Return analytic 3-D TGV velocity at positions x (L=1 domain)."""
+    u = np.zeros_like(x)
+    u[:, 0] = +np.sin(x[:, 0]) * np.cos(x[:, 1]) * np.cos(x[:, 2])
+    u[:, 1] = -np.cos(x[:, 0]) * np.sin(x[:, 1]) * np.cos(x[:, 2])
+    u[:, 2] = 0.0
+    return u
+
+
 if __name__ == "__main__":
-    root = Path(__file__).resolve().parent
-    src = root / "res_tgv2d_init/state_step_00006000.bin"
-    dst = root / "res_tgv2d_init/relaxed_state.bin"
+    parser = argparse.ArgumentParser(description="Write analytical velocity field")
+    parser.add_argument("--type", type=str, help="Type of field, e.g., tgv2d/tgv3d")
+    parser.add_argument("--src", type=Path, help="Path to a state_step file")
+    args = parser.parse_args()
+
+    src = args.src
+    dst = args.src.parent / "relaxed_state.bin"
 
     state = load_state(src)
-    u_new = tgv_velocity(state["x"])
+    if args.type == "tgv2d":
+        u_new = tgv2d_u(state["x"])
+    elif args.type == "tgv3d":
+        u_new = tgv3d_u(state["x"])
+    else:
+        raise NotImplementedError
     write_state(dst, nx=state["nx"], n=state["n"], t=state["t"], x=state["x"], u=u_new)
 
     print(f"Loaded: {src}")
