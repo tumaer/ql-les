@@ -43,6 +43,7 @@ def relax_wrapper(
     nu=0.0,
     box=None,
     tvf_factor=1.0,
+    separate_tvf=False,
 ):
     """Compute pressure gradient term from NSE.
 
@@ -126,27 +127,36 @@ def relax_wrapper(
                 temp = eta_ij * u_ij / (d_ij[:, None] + EPS) * kernel_der[:, None]
                 # Eq. (10), Adami (2012)
                 acc += nu * prefactor[:, None] * temp
+                # if only_visc:
+                #     acc = nu * prefactor[:, None] * temp
 
             if is_tvf:
                 # Add transport velocity acceleration term on top (Eq. 13)
                 dvdt = (prefactor * kernel_der / (d_ij + EPS) * (-p_eos))[:, None] * r_ij
-                acc += tvf_factor * 0.5 * dvdt
-
-            return acc
+                acc_tvf = 0.5 * tvf_factor * dvdt  # 0.5 is from integrator.
+                if separate_tvf:
+                    return {"acc": acc, "acc_tvf": acc_tvf}
+                else:
+                    return {"acc": acc + acc_tvf}
+            return {"acc": acc}
 
         if nu != 0.0:
             u_i, u_j = u[i_s], u[j_s]
         else:
             u_i, u_j = None, None
         out = acceleration_fn(dr_ij, dist, rho[i_s], rho[j_s], p[i_s], p[j_s], u_i, u_j)
-        acc = scatter_add(out, i_s, dim=0, dim_size=N_tot)
+        if is_tvf and separate_tvf:
+            acc_tvf = scatter_add(out["acc_tvf"], i_s, dim=0, dim_size=N_tot)
+            acc_tvf = denormalize_length(acc_tvf)
+        acc = scatter_add(out["acc"], i_s, dim=0, dim_size=N_tot)
         acc = denormalize_length(acc)
 
         if not return_all:
             # return only the acceleration
             return acc
         else:
-            return {"acc": acc, "rho": rho, "p": p, "edge_index": edge_index}
+            tvf_res = {"acc_tvf": acc_tvf} if (is_tvf and separate_tvf) else {}
+            return {"acc": acc, "rho": rho, "p": p, "edge_index": edge_index} | tvf_res
 
     return loop_body
 
@@ -155,20 +165,27 @@ if __name__ == "__main__":
     torch.set_printoptions(precision=8)
     from tqdm import tqdm
     import matplotlib.pyplot as plt
+    import os
+
+    os.makedirs("figs_0", exist_ok=True)  # run from Cartesian grid
+    os.makedirs("figs_1", exist_ok=True)  # run from relaxed positions
+    fig_dir = "figs_1" if os.path.exists("figs_0/tgv_2d_final_tvf.pt") else "figs_0"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def plt_frame(x, u, t):
-        fig, ax = plt.subplots()
-        sc = ax.scatter(x[:, 0], x[:, 1], c=u, s=1, vmin=0.98, vmax=1.02)
+    def plt_frame(x, u, t, suffix=None):
+        """Plot a single frame of the TGV velocity field."""
+        fig, ax = plt.subplots(layout="constrained")
+        sc = ax.scatter(x[:, 0], x[:, 1], c=u, s=5, vmin=0.98, vmax=1.02)
         ax.set_title(f"t={t:.3f}")
         ax.set_aspect("equal")
         cbar = plt.colorbar(sc, ax=ax, orientation="vertical")
-        cbar.set_label("Value")
-        plt.savefig(f"tgv_2d_{t:.3f}.png")
+        cbar.set_label("Density")
+        plt.savefig(f"{fig_dir}/tgv_2d_{t:.3f}{suffix}.png")
 
     def plt_evolution(ts, val, label, ref=None):
-        fig, ax = plt.subplots()
+        """Plot a scalar quantity over time and optionally overlay a reference curve."""
+        fig, ax = plt.subplots(layout="constrained")
         ax.plot(ts, val)
         ax.set_xlabel("Time")
         ax.set_ylabel(label)
@@ -176,12 +193,10 @@ if __name__ == "__main__":
             ax.plot(ts, ref, "k--")
         ax.set_yscale("log")
         ax.grid()
-        fig.savefig(f"tgv_2d_{label}.png")
+        fig.savefig(f"{fig_dir}/tgv_2d_{label}.png")
 
     #### Run TGV 2D to validate the SPH implementation.
     # based on: https://github.com/tumaer/jax-sph/blob/main/cases/tgv.py
-    is_tvf = False
-
     Nx, Lx, dim = 50, 1.0, 2
     dx = Lx / Nx
     box_size = torch.ones(dim).to(device) * Lx
@@ -189,35 +204,38 @@ if __name__ == "__main__":
     nu = 0.01
     dt = 0.0005  # CFL * dx / (11 * u_ref) = 0.25 * 0.02 / (11 * 1) = 0.000454545...
     t_end = 3
-    x = torch.tensor(pos_init_cartesian_2d(box_size.cpu(), dx), dtype=torch.float32).to(device)
-    u = torch.stack(
-        [
-            -1.0 * torch.cos(2.0 * np.pi * x[:, 0]) * torch.sin(2.0 * np.pi * x[:, 1]),
-            +1.0 * torch.sin(2.0 * np.pi * x[:, 0]) * torch.cos(2.0 * np.pi * x[:, 1]),
-        ],
-        dim=1,
-    ).to(device)
-    v = u.clone()
-    kwargs = {"Nx": Nx, "dim": dim, "L": Lx, "is_physical": True, "u_ref": u_ref, "nu": nu}
-    kwargs["box"] = box_size
-    u_fn = relax_wrapper(**kwargs, is_tvf=False)
-    v_fn = relax_wrapper(**kwargs, is_tvf=is_tvf)
-    n_part_per_traj = torch.tensor([x.shape[0]], dtype=torch.int64).to(device)
+    for is_tvf in [False, True]:
+        suffix = "_tvf" if is_tvf else ""
+        if os.path.exists("figs_0/tgv_2d_final_tvf.pt"):
+            print("Loading existing x ...")
+            x = torch.load("figs_0/tgv_2d_final_tvf.pt", map_location=device)["x"]
+        else:
+            x = pos_init_cartesian_2d(box_size.cpu(), dx)
+            x = torch.tensor(x, dtype=torch.float32).to(device)
+        ux = -1.0 * torch.cos(2.0 * np.pi * x[:, 0]) * torch.sin(2.0 * np.pi * x[:, 1])
+        uy = +1.0 * torch.sin(2.0 * np.pi * x[:, 0]) * torch.cos(2.0 * np.pi * x[:, 1])
+        u = torch.stack([ux, uy], dim=1).to(device)
+        v = u.clone()
+        kwargs = {"Nx": Nx, "dim": dim, "L": Lx, "is_physical": True, "u_ref": u_ref, "nu": nu}
+        kwargs["box"] = box_size
+        sph_fn = relax_wrapper(**kwargs, is_tvf=is_tvf, separate_tvf=True)
+        n_part_per_traj = torch.tensor([x.shape[0]], dtype=torch.int64).to(device)
 
-    umax, rho_max = [], []
-    ts = [i * dt for i in range(round(t_end / dt) + 1)]
-    u_max_ref = np.exp(-8 * np.pi**2 * 0.01 * np.array(ts)) * u_ref
-    for t in tqdm(ts):
-        outputs = u_fn(x, n_part_per_traj, u=u, return_all=True)
-        u = u + dt * outputs["acc"]
-        v = u + dt * v_fn(x, n_part_per_traj, u=u)
-        x = shift_fn(x, dt * v, box=box_size, pbc=True)
-        umax.append(u.abs().max().item())
-        rho_max.append(outputs["rho"].max().item())
-        if t in [0.0, 0.2, 0.4, 0.6]:
-            plt_frame(x.cpu(), outputs["rho"].cpu(), t)
-    plt_evolution(ts, umax, "u_max", u_max_ref)
-    plt_evolution(ts, rho_max, "rho_max")
+        umax, rho_max = [], []
+        ts = [i * dt for i in range(round(t_end / dt) + 1)]
+        u_max_ref = np.exp(-8 * np.pi**2 * nu * np.array(ts)) * u_ref
+        for t in tqdm(ts):
+            outputs = sph_fn(x, n_part_per_traj, u=u, return_all=True)
+            u = u + dt * outputs["acc"]
+            v = u + dt * (outputs["acc_tvf"] if is_tvf else 0)  # factor 0.5 in acc_tvf
+            x = shift_fn(x, dt * v, box=box_size, pbc=True)
+            umax.append(u.abs().max().item())
+            rho_max.append(outputs["rho"].max().item())
+            if t in [0.0, 0.2, 0.4, 0.6]:
+                plt_frame(x.cpu(), outputs["rho"].cpu(), t, suffix)
+        torch.save({"x": x.cpu(), "u": u.cpu()}, f"{fig_dir}/tgv_2d_final{suffix}.pt")
+        plt_evolution(ts, umax, "u_max" + suffix, u_max_ref)
+        plt_evolution(ts, rho_max, "rho_max" + suffix)
 
     #### Plot QuinticKernel
     a = torch.linspace(0, 0.4, 100)
@@ -229,4 +247,4 @@ if __name__ == "__main__":
     axs[1].plot(a, g)
     for ax in axs:
         ax.grid()
-    fig.savefig("quintic_torch.png")
+    fig.savefig(f"{fig_dir}/quintic_torch.png")
