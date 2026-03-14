@@ -16,14 +16,14 @@ mkdir -p build
 nvcc -O3 -std=c++17 solver.cu -o build/solver
 
 # Step 1: relaxation pass
-./build/solver --config cfg/tgv2d_init.conf
-python init_u.py --type tgv2d --src "res/tgv2d_init/state_step_00006000.bin"
+./build/solver --config cfg/tgv2d_50_init.conf
+python init_u_tgv.py --type tgv2d --src "res/tgv2d_50_init/state_step_00006000.bin"
 
 # Step 2: production runs
-./build/solver --config cfg/tgv2d_tvf.conf
-./build/solver --config cfg/tgv2d_notvf.conf
+./build/solver --config cfg/tgv2d_50_tvf.conf
+./build/solver --config cfg/tgv2d_50_notvf.conf
 
 # Step 3: analysis
-python analyse.py --type tgv2d --path res/tgv2d_init
-python analyse.py --type tgv2d --path res/tgv2d_tvf
-python analyse.py --type tgv2d --path res/tgv2d_notvf
+python analyse.py --type tgv2d --path res/tgv2d_50_init
+python analyse.py --type tgv2d --path res/tgv2d_50_tvf
+python analyse.py --type tgv2d --path res/tgv2d_50_notvf

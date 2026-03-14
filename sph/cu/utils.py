@@ -14,9 +14,9 @@ def load_state(path: str | Path) -> dict[str, np.ndarray | int | float]:
     """Load one state file produced by tgv_cuda.
 
     Binary layout (little-endian):
-    - int32 nx
-    - int32 n
-    - float64 t
+    - int32 nx, number of particles along x
+    - int32 n, total number of particles
+    - float64 t, final simulation time
     - x: n x 3 float64  (Vec3; z=0 for 2-D runs)
     - u: n x 3 float64  (Vec3; z=0 for 2-D runs)
     """
@@ -75,7 +75,7 @@ def write_state(
         f.write(u_arr.tobytes(order="C"))
 
 
-def plt_evolution(ts, val, label: str, ref=None, fig_dir: Path = Path("fig")) -> None:
+def plt_evolution(ts, val, label: str, ref=None, fig_dir: Path = Path("fig"), yscale=None) -> None:
     """Plot a scalar quantity over time and optionally overlay a reference curve."""
     fig, ax = plt.subplots(layout="constrained")
     ax.plot(ts, val, label=label)
@@ -83,7 +83,8 @@ def plt_evolution(ts, val, label: str, ref=None, fig_dir: Path = Path("fig")) ->
         ax.plot(ts, ref, "k--", label="ref")
     ax.set_xlabel("Time")
     ax.set_ylabel(label)
-    ax.set_yscale("log")
+    if yscale:
+        ax.set_yscale("log")
     ax.grid()
     fig.savefig(fig_dir / f"tgv_{label}.png")
     plt.close(fig)

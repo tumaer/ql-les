@@ -1,48 +1,25 @@
-import h5py
 import numpy as np
 import jax.numpy as jnp
-from jax import Array, ops, vmap
+from jax import ops, vmap
 from numpy import array
 from scipy.spatial import KDTree
-from jax.scipy.special import factorial
 from . import jax_md_space as space
-from .jax_sph_kernel import QuinticKernel
+from .jax_sph_kernel import QuinticKernel, M4PrimeKernel
 
 EPS = jnp.finfo(float).eps
 
 
-def read_h5(file_name: str, array_type: str = "jax"):
-    """Read an .h5 file and return a dict of numpy or jax arrays."""
-    hf = h5py.File(file_name, "r")
-
-    data_dict = {}
-    for k, v in hf.items():
-        if array_type == "jax":
-            data_dict[k] = jnp.array(v)
-        elif array_type == "numpy":
-            data_dict[k] = np.array(v)
-        else:
-            raise ValueError('array_type must be either "jax" or "numpy"')
-
-    hf.close()
-
-    return data_dict
-
-
-def pos_init_cartesian_2d(box_size: array, dx: float):
-    """Create a grid of particles in 2D.
-
-    Particles are at the center of the corresponding Cartesian grid cells.
-    Example: if box_size=np.array([1, 1]) and dx=0.1, then the first particle will be at
-    position [0.05, 0.05].
-    """
-    n = np.array((box_size / dx).round(), dtype=int)
-    grid = np.meshgrid(range(n[0]), range(n[1]), indexing="xy")
-    r = (jnp.vstack(list(map(jnp.ravel, grid))).T + 0.5) * dx
-    return r
-
-
-def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_factor=None):
+def mls_2nd_order(
+    r,
+    r_target,
+    f,
+    box_size,
+    dx,
+    dim,
+    kernel_name="M4Prime",
+    h_factor=None,
+    regularization=1e-10,
+):
     """2nd-order moving least squares interpolation for periodic flows in a
     rectangular box.
 
@@ -61,18 +38,37 @@ def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_fa
         (np.ndarray): interpolated values of f on r_target
     """
 
+    if dim not in (2, 3):
+        raise ValueError(f"Only 2D and 3D are supported, got dim={dim}")
+
     # define kernel function
     if kernel_name == "M4Prime":
         h_factor = 0.85 if h_factor is None else h_factor
         kernel_fn = M4PrimeKernel(h=h_factor * dx, dim=dim)
+        distance_p = np.inf
     elif kernel_name == "Quintic":
         h_factor = 2 / 3 if h_factor is None else h_factor
         kernel_fn = QuinticKernel(h=h_factor * dx, dim=dim)
+        distance_p = 2
     else:
         raise NotImplementedError(f"Kernel {kernel_name} not implemented.")
 
+    r = np.asarray(r)
+    r_target = np.asarray(r_target)
+    f = np.asarray(f)
+    box_size = np.asarray(box_size, dtype=float)
+
+    if r.ndim != 2 or r_target.ndim != 2:
+        raise ValueError("r and r_target must be 2D arrays of shape (N, dim)")
+    if r.shape[1] != dim or r_target.shape[1] != dim:
+        raise ValueError(f"Expected last dimension to be {dim}")
+    if f.ndim != 1 or f.shape[0] != r.shape[0]:
+        raise ValueError("f must be a 1D scalar field with shape (N,)")
+    if box_size.shape != (dim,):
+        raise ValueError("box_size must be a scalar or sequence of length dim")
+
     # displacement function for neighbors list
-    displacement_fn, shift_fn = space.periodic(side=box_size)
+    displacement_fn, _ = space.periodic(side=box_size)
 
     # number of target particles
     n_target = jnp.shape(r_target)[0]
@@ -82,9 +78,22 @@ def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_fa
 
     # compute edge list
     tree = KDTree(r_pbc)
-    senders = tree.query_ball_point(r_target, kernel_fn.cutoff, p=np.inf)
-    i_s = np.repeat(range(n_target), [len(x) for x in senders])
+    senders = tree.query_ball_point(r_target, kernel_fn.cutoff, p=distance_p)
+    sender_sizes = [len(x) for x in senders]
+    if not any(sender_sizes):
+        return jnp.zeros((n_target,), dtype=jnp.asarray(f).dtype)
+
+    i_s = np.repeat(range(n_target), sender_sizes)
     j_s = np.concatenate(senders, axis=0)
+
+    # r_np = np.asarray(r_target)
+    # import matplotlib.pyplot as plt
+    # fig, ax = plt.subplots()
+    # ax.scatter(r_np[:,0], r_np[:,1], c='blue', s=1)
+    # ax.scatter(r_pbc[:,0], r_pbc[:,1], c='red', s=1)
+    # ax.set_aspect('equal')
+    # fig.savefig("tmp.png")
+    # plt.close()
 
     # precompute quantities
     r_ji = vmap(displacement_fn)(r_pbc[j_s], r_target[i_s])
@@ -96,10 +105,9 @@ def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_fa
     else:
         raise NotImplementedError(f"Kernel {kernel_name} not implemented.")
 
-    # define size of the linear system of equations
-    sum1 = factorial(dim) / factorial(dim - 1)
-    sum2 = factorial(dim + 1) / (factorial(dim - 1) * 2)
-    mat_size = round(1 + sum1 + sum2)
+    # Basis size for quadratic polynomial in dim dimensions:
+    # 1 + dim + dim*(dim+1)/2
+    mat_size = 1 + dim + (dim * (dim + 1)) // 2
 
     # calculate indices
     ind_d = jnp.diag_indices(dim)
@@ -124,6 +132,7 @@ def mls_2nd_order(r, r_target, f, box_size, dx, dim, kernel_name="M4Prime", h_fa
     # calculate matrix
     temp = vmap(matrix)(w_dist, r_ji)
     mat = ops.segment_sum(temp, i_s, n_target)
+    mat = mat + regularization * jnp.eye(mat_size)[None, :, :]
 
     # define solution vector entries
     def vector(w_dist, r_ji, f_j):
@@ -247,134 +256,3 @@ def pbc_copy_scalar(
         f_pbc = f[ind]
 
     return r_pbc, f_pbc
-
-
-def get_real_wavenumber_grid(n, dim):
-    """Get the real wavenumber grid for a given dimension and max wavenumber."""
-    Nf = n // 2 + 1
-    k = np.fft.fftfreq(n, 1.0 / n)  # for other dimensions
-    kx = k[:Nf].copy()
-    kx[-1] *= -1
-    if dim == 2:
-        k_field = np.array(np.meshgrid(kx, k, indexing="ij"), dtype=int)
-    elif dim == 3:
-        k_field = np.array(np.meshgrid(kx, k, k, indexing="ij"), dtype=int)
-    return k_field, k
-
-
-def energy_spectrum(vel: Array, mul_fac: float = 1.0, is_scalar_field: bool = False):
-    """JAX implemented energy spectrum computation on a grid.
-
-    Code based on JAX-FLUIDS implementation."""
-
-    dim = vel.shape[0]
-    ns = vel.shape[1:]
-
-    # check for square box with equal side length
-    assert jnp.array_equal(ns, jnp.ones(dim) * ns[0])
-
-    # common resolution
-    n = ns[0]
-
-    # Fourier transform
-    if dim == 1:
-        # TODO: check whether 1D is working
-        vel_hat = jnp.fft.rfftn(vel)
-    elif dim == 2:
-        vel_hat = jnp.fft.rfftn(vel, axes=(2, 1))
-    elif dim == 3:
-        vel_hat = jnp.fft.rfftn(vel, axes=(3, 2, 1))
-
-    # initialize wavenumber grid
-    k_field, k = get_real_wavenumber_grid(n, dim)
-
-    # compute prefactor
-    fact = (
-        2 * (k_field[0] > 0) * (k_field[0] < n // 2)
-        + 1 * (k_field[0] == 0)
-        + 1 * (k_field[0] == n // 2)
-    )
-
-    # calculate wavenumber vector norms
-    k_field_norm = jnp.linalg.norm(k_field, axis=0, ord=2)
-
-    # calculate integration shell
-    shell = (k_field_norm + 0.5).astype(int).flatten()
-
-    # fourier transform prefactor
-    vel_hat /= n**dim
-
-    # calculate energy
-    abs_energy = jnp.sum(jnp.abs(vel_hat**2), axis=0)
-    abs_energy *= fact * mul_fac
-
-    # number of samples
-    n_samples = jnp.zeros(n)
-    n_samples = n_samples.at[shell].add(fact.flatten())
-
-    # compute energy spectrum
-    ek = jnp.zeros(n)
-    ek = ek.at[shell].add(abs_energy.flatten())
-    ek *= 4 * jnp.pi * k**2 / (n_samples + EPS)
-
-    return ek
-
-
-class M4PrimeKernel:
-    """The M'4 kernel"""
-
-    def __init__(self, h, dim=3):
-        self._one_over_h = 1.0 / h
-        self._normalized_cutoff = 2.0
-        self.cutoff = self._normalized_cutoff * h
-
-    def w(self, r):
-        """Evaluates the kernel at the radial displacement vector r."""
-        q = r * self._one_over_h
-        q1 = 1 - 2.5 * q**2 + 1.5 * q**3
-        q2 = 0.5 * (1 - q) * (2 - q) ** 2
-
-        res = jnp.where(q < 1, q1, 0)
-        res = jnp.where((q >= 1) * (q < 2), q2, res)
-        return jnp.prod(res)  # , axis=1
-
-
-class FourierQuinticKernel:
-    """The quintic kernel function of Morris in Fourier space."""
-
-    def __init__(self, h, dim=3):
-        self._one_over_h = 1.0 / h
-
-        self._normalized_cutoff = 3.0
-        self.cutoff = self._normalized_cutoff * h
-        if dim == 1:
-            self._sigma = 1.0 / 120.0 * self._one_over_h
-        elif dim == 2:
-            self._sigma = 7.0 / 478.0 / jnp.pi * self._one_over_h**2
-        elif dim == 3:
-            self._sigma = 3.0 / 359.0 / jnp.pi * self._one_over_h**3
-
-    def w(self, k):
-        pjk = jnp.pi * 1j * k
-        exp = jnp.exp(2 * pjk)
-        q1 = (
-            jnp.exp(-2 * pjk)
-            * (
-                3 * exp * (44 * pjk**5 - 20 * pjk**3 + 30 * pjk - 25)
-                - 2 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30)
-                + 75
-            )
-        ) / (4 * pjk**6)
-        q2 = (
-            jnp.exp(-4 * pjk)
-            * (
-                -2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15)
-                + exp * (4 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30) + 75)
-                - 75
-            )
-        ) / (8 * pjk**6)
-        q3 = (
-            jnp.exp(-6 * pjk)
-            * (exp * (2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15) - 15) + 15)
-        ) / (8 * pjk**6)
-        return self._sigma * (q1 + q2 + q3)

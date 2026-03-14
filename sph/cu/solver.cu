@@ -152,15 +152,15 @@ __global__ void init_tgv_kernel(Vec3* pos, Vec3* vel, int nx, Real L, Real dx) {
     int iy = (tid / nx) % nx;
     Real x = (ix + 0.5) * dx;
     Real y = (iy + 0.5) * dx;
+    Real k0  = 2.0 * kPi / L;
 
     if constexpr (DIM == 2) {
         pos[tid] = make_double3(x, y, 0.0);
-        vel[tid] = make_double3(-cos(2.0*kPi*x)*sin(2.0*kPi*y),
-                                +sin(2.0*kPi*x)*cos(2.0*kPi*y), 0.0);
+        vel[tid] = make_double3(-cos(k0*x)*sin(k0*y),
+                                +sin(k0*x)*cos(k0*y), 0.0);
     } else {
         int  iz  = tid / (nx * nx);
         Real z   = (iz + 0.5) * dx;
-        Real k0  = 2.0 * kPi / L;
         pos[tid] = make_double3(x, y, z);
         vel[tid] = make_double3(+sin(k0*x)*cos(k0*y)*cos(k0*z),
                                 -cos(k0*x)*sin(k0*y)*cos(k0*z), 0.0);
@@ -316,6 +316,14 @@ struct SpeedNorm {
     }
 };
 
+template <int DIM>
+struct SpeedSqDim {
+    __host__ __device__ Real operator()(const Vec3& u) const {
+        if constexpr (DIM == 2) return u.x*u.x + u.y*u.y;
+        else                    return u.x*u.x + u.y*u.y + u.z*u.z;
+    }
+};
+
 // ─── unified simulation class ────────────────────────────────────────────────
 
 template <int DIM>
@@ -460,13 +468,18 @@ public:
                     thrust::device_pointer_cast(d_vel_),
                     thrust::device_pointer_cast(d_vel_) + n_,
                     SpeedNorm(), 0.0, thrust::maximum<Real>());
+                Real u2_mean = thrust::transform_reduce(
+                    thrust::device_pointer_cast(d_vel_),
+                    thrust::device_pointer_cast(d_vel_) + n_,
+                    SpeedSqDim<DIM>(), 0.0, thrust::plus<Real>()) / static_cast<Real>(n_);
+                Real kinetic_energy = 0.5 * u2_mean * ipow_real(params_.L);
 
                 std::cout << "step=" << step << " t=" << t << " umax=" << umax;
                 if constexpr (DIM == 2) {
                     Real uref = std::exp(-8.0 * kPi * kPi * params_.nu * t) * params_.u_ref;
                     std::cout << " uref=" << uref;
                 }
-                std::cout << " rho_max=" << rho_max << "\n";
+                std::cout << " rho_max=" << rho_max << " ekin=" << kinetic_energy << "\n";
 
                 if (diag_csv_.is_open()) {
                     diag_csv_ << step << "," << std::setprecision(17) << t
@@ -475,7 +488,7 @@ public:
                         Real uref = std::exp(-8.0 * kPi * kPi * params_.nu * t) * params_.u_ref;
                         diag_csv_ << "," << uref;
                     }
-                    diag_csv_ << "," << rho_max << "\n";
+                    diag_csv_ << "," << rho_max << "," << kinetic_energy << "\n";
                     diag_csv_.flush();
                 }
             }
@@ -574,7 +587,7 @@ private:
         if (!diag_csv_) throw std::runtime_error("Failed to open diagnostics CSV: " + csv);
         diag_csv_ << "step,time,umax";
         if constexpr (DIM == 2) diag_csv_ << ",uref";
-        diag_csv_ << ",rho_max\n";
+        diag_csv_ << ",rho_max,ekin\n";
     }
 
     void save_state(int step, Real t) {
@@ -621,24 +634,122 @@ private:
 
 }  // namespace minimal_sph
 
+namespace {
+
+struct CliOverrides {
+    bool has_dim = false;
+    bool has_nx = false;
+    bool has_L = false;
+    bool has_u_ref = false;
+    bool has_nu = false;
+    bool has_dt = false;
+    bool has_save_dir = false;
+    bool has_init_state_file = false;
+    bool has_t_end = false;
+    bool has_tvf_factor = false;
+    bool has_print_every = false;
+    bool has_save_every = false;
+    bool has_noise_std_factor = false;
+    int dim = 2;
+    int nx = 0;
+    int print_every = 0;
+    int save_every = 0;
+    minimal_sph::Real L = 0.0;
+    minimal_sph::Real u_ref = 0.0;
+    minimal_sph::Real nu = 0.0;
+    minimal_sph::Real dt = 0.0;
+    std::string save_dir;
+    std::string init_state_file;
+    minimal_sph::Real t_end = 0.0;
+    minimal_sph::Real tvf_factor = 0.0;
+    minimal_sph::Real noise_std_factor = 0.0;
+};
+
+void print_usage() {
+    std::cerr << "Usage: ./solver [config_path] [--config path]"
+              << " [--dim value] [--nx value] [--L value] [--u_ref value] [--nu value]"
+              << " [--dt value] [--t_end value] [--tvf_factor value]"
+              << " [--print_every value] [--save_every value]"
+              << " [--noise_std_factor value] [--save_dir path]"
+              << " [--init_state_file path]\n";
+}
+
+std::string require_arg_value(const std::string& flag, int argc, char** argv, int& i) {
+    if (i + 1 >= argc) {
+        throw std::runtime_error("Missing value after " + flag);
+    }
+    return argv[++i];
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     std::string conf_path = "case.conf";
-    if (argc >= 2) {
-        if (std::strcmp(argv[1], "--config") == 0) {
-            if (argc < 3) {
-                std::cerr << "Missing path after --config\n"
-                          << "Usage: ./solver [--config path]\n";
-                return 1;
+    CliOverrides overrides;
+    bool have_positional_config = false;
+
+    try {
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+
+            if (arg == "--config") {
+                conf_path = require_arg_value(arg, argc, argv, i);
+                have_positional_config = true;
+            } else if (arg == "--dim") {
+                overrides.dim = std::stoi(require_arg_value(arg, argc, argv, i));
+                overrides.has_dim = true;
+            } else if (arg == "--nx") {
+                overrides.nx = std::stoi(require_arg_value(arg, argc, argv, i));
+                overrides.has_nx = true;
+            } else if (arg == "--L") {
+                overrides.L = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_L = true;
+            } else if (arg == "--u_ref") {
+                overrides.u_ref = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_u_ref = true;
+            } else if (arg == "--nu") {
+                overrides.nu = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_nu = true;
+            } else if (arg == "--dt") {
+                overrides.dt = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_dt = true;
+            } else if (arg == "--save_dir") {
+                overrides.save_dir = require_arg_value(arg, argc, argv, i);
+                overrides.has_save_dir = true;
+            } else if (arg == "--init_state_file") {
+                overrides.init_state_file = require_arg_value(arg, argc, argv, i);
+                overrides.has_init_state_file = true;
+            } else if (arg == "--t_end") {
+                overrides.t_end = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_t_end = true;
+            } else if (arg == "--tvf_factor") {
+                overrides.tvf_factor = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_tvf_factor = true;
+            } else if (arg == "--print_every") {
+                overrides.print_every = std::stoi(require_arg_value(arg, argc, argv, i));
+                overrides.has_print_every = true;
+            } else if (arg == "--save_every") {
+                overrides.save_every = std::stoi(require_arg_value(arg, argc, argv, i));
+                overrides.has_save_every = true;
+            } else if (arg == "--noise_std_factor") {
+                overrides.noise_std_factor = std::stod(require_arg_value(arg, argc, argv, i));
+                overrides.has_noise_std_factor = true;
+            } else if (!arg.empty() && arg[0] != '-' && !have_positional_config) {
+                conf_path = arg;
+                have_positional_config = true;
+            } else {
+                throw std::runtime_error("Unknown argument: " + arg);
             }
-            conf_path = argv[2];
-        } else {
-            conf_path = argv[1];
         }
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        print_usage();
+        return 1;
     }
 
     // Peek at the config to read dim= before instantiating the template.
-    int dim = 2;
-    {
+    int dim = overrides.has_dim ? overrides.dim : 2;
+    if (!overrides.has_dim) {
         std::ifstream in(conf_path);
         std::string line;
         while (std::getline(in, line)) {
@@ -650,18 +761,45 @@ int main(int argc, char** argv) {
     }
 
     try {
+        auto apply_overrides = [&overrides](auto& params) {
+            if (overrides.has_nx) params.nx = overrides.nx;
+            if (overrides.has_L) params.L = overrides.L;
+            if (overrides.has_u_ref) params.u_ref = overrides.u_ref;
+            if (overrides.has_nu) params.nu = overrides.nu;
+            if (overrides.has_dt) params.dt = overrides.dt;
+            if (overrides.has_save_dir) params.save_dir = overrides.save_dir;
+            if (overrides.has_init_state_file) params.init_state_file = overrides.init_state_file;
+            if (overrides.has_t_end) params.t_end = overrides.t_end;
+            if (overrides.has_tvf_factor) params.tvf_factor = overrides.tvf_factor;
+            if (overrides.has_print_every) params.print_every = overrides.print_every;
+            if (overrides.has_save_every) params.save_every = overrides.save_every;
+            if (overrides.has_noise_std_factor) params.noise_std_factor = overrides.noise_std_factor;
+        };
+
+        if (dim != 2 && dim != 3)
+            throw std::runtime_error("Unsupported dim: " + std::to_string(dim));
+
         if (dim == 3) {
             using Sim = minimal_sph::SphSolver<3>;
-            Sim sim(Sim::from_conf(conf_path));
+            auto params = Sim::from_conf(conf_path);
+            apply_overrides(params);
+            Sim sim(params);
             sim.run();
         } else {
             using Sim = minimal_sph::SphSolver<2>;
-            Sim sim(Sim::from_conf(conf_path));
+            auto params = Sim::from_conf(conf_path);
+            apply_overrides(params);
+            Sim sim(params);
             sim.run();
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n"
-                  << "Usage: ./solver [--config path]\n";
+                  << "Usage: ./solver [config_path] [--config path]"
+                  << " [--dim value] [--nx value] [--L value] [--u_ref value] [--nu value]"
+                  << " [--dt value] [--t_end value] [--tvf_factor value]"
+                  << " [--print_every value] [--save_every value]"
+                  << " [--noise_std_factor value] [--save_dir path]"
+                  << " [--init_state_file path]\n";
         return 1;
     }
 

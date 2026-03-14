@@ -12,12 +12,16 @@ import numpy as np
 from utils import load_states, plt_evolution
 
 
-def plt_field_2d(state: dict, suffix: str, fig_dir: Path = Path("fig")) -> None:
+def plt_field_2d(state: dict, fig_dir: Path = Path("fig"), vref=1) -> None:
     """Scatter-plot the x-velocity component of a snapshot."""
     x = state["x"]
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.scatter(x[:, 0], x[:, 1], c=state["u"][:, 0], s=5, vmin=-1, vmax=1)
-    fig.savefig(fig_dir / f"ux{suffix}.png")
+    fig, ax = plt.subplots(figsize=(5, 4.5), layout="constrained")
+    vmag = (state["u"] ** 2).sum(-1) ** 0.5
+    scatter = ax.scatter(x[:, 0], x[:, 1], c=vmag, s=10, vmin=0, vmax=vref)
+    ax.set_title("|u|")
+    ax.set_aspect("equal")
+    plt.colorbar(scatter, ax=ax)
+    fig.savefig(fig_dir / f"ux_{state['t']:.4f}.png")
     plt.close(fig)
 
 
@@ -56,7 +60,7 @@ if __name__ == "__main__":
 
     assert args.path.is_dir()
 
-    if args.type == "tgv2d":
+    if args.type == "tgv2d" or args.type == "kolm2d":
         states = load_states(args.path)
         df = pd.read_csv(args.path / "diagnostics.csv")
 
@@ -65,13 +69,18 @@ if __name__ == "__main__":
 
         # uref column is only present for 2-D runs
         uref = df["uref"].values if "uref" in df.columns else None
-        plt_evolution(df["time"].values, df["umax"].values, "umax", uref, fig_dir)
-        plt_evolution(df["time"].values, df["rho_max"].values, "rho_max", None, fig_dir)
+        t = df["time"].values
+        plt_evolution(t, df["umax"].values, "umax", uref, fig_dir, yscale="log")
+        plt_evolution(t, df["rho_max"].values, "rho_max", None, fig_dir)
+        plt_evolution(t, df["ekin"].values, "ekin", None, fig_dir, yscale="log")
 
+        vref = {"tgv2d": 1, "kolm2d": 4}[args.type]
         if len(states) > 0:
-            plt_field_2d(states[0], "_t0", fig_dir)
+            plt_field_2d(states[0], fig_dir, vref=vref)
         if len(states) > 2:
-            plt_field_2d(states[2], "_t02", fig_dir)
+            plt_field_2d(states[2], fig_dir, vref=vref)
+        if len(states) > 3:
+            plt_field_2d(states[-1], fig_dir, vref=vref)
 
     elif args.type == "tgv3d":
         states = load_states(args.path)
