@@ -1,9 +1,10 @@
-"""Small utility to compare Kolm2d runs against the spectral reference."""
+"""Utilities to analyse Kolm2d and HIT3d runs against DNS references."""
 
 from __future__ import annotations
 
 import argparse
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -17,10 +18,28 @@ from utils import _step_from_name, load_state
 from src.utils.jax_utils.interpolate import ParticleGridInterpolator
 from src.utils.jax_utils.jax_spectral import energy_spectrum
 
-REF_PATH = Path("/local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1")
-REF_TRAJ_IDS = range(15, 20)
-REF_BURNIN = 4500
 BOX_SIZE = 2 * np.pi
+REF_TRAJ_IDS = range(15, 20)
+
+
+@dataclass(frozen=True)
+class CaseConfig:
+    """Helper for case-specific parameters and patterns."""
+
+    name: str
+    dim: int
+    run_pattern: str
+    ref_pattern: str
+
+
+CASE_CONFIGS = {
+    "kolm2d": CaseConfig(
+        name="kolm2d", dim=2, run_pattern="state_step_*.bin", ref_pattern="com/step_*.h5"
+    ),
+    "hit3d": CaseConfig(
+        name="hit3d", dim=3, run_pattern="state_step_*.bin", ref_pattern="com/step_*.h5"
+    ),
+}
 
 
 def _stats(arr: np.ndarray) -> dict[str, np.ndarray]:
@@ -32,14 +51,18 @@ def _stats(arr: np.ndarray) -> dict[str, np.ndarray]:
     }
 
 
-def _step_from_h5_name(path: Path) -> int:
-    """Simulation step from step_*.h5 l3es h5 file."""
-    return int(path.stem.split("_")[1])
+def _step_from_filename(file):
+    """e.g.: "step_00000.h5" or "u_64_00000.npy"""
+    return int(file.stem.split("_")[-1])
 
 
 def _step_from_spectrum_name(path: Path) -> int:
     """Simulation step from spectrum_*.csv file from SPH CUDA solver."""
     return int(path.stem.split("_")[1])
+
+
+def _infer_n_per_dim(n_particles: int, dim: int) -> int:
+    return int(round(n_particles ** (1.0 / dim)))
 
 
 def _latest_file(traj: Path, pattern: str, key: Callable[[Path], int]) -> Path | None:
@@ -49,22 +72,24 @@ def _latest_file(traj: Path, pattern: str, key: Callable[[Path], int]) -> Path |
 
 
 @lru_cache(maxsize=None)
-def _get_interpolator(nx: int) -> ParticleGridInterpolator:
+def _get_interpolator(nx: int, dim: int) -> ParticleGridInterpolator:
     """Interpolator convenience wrapper."""
     return ParticleGridInterpolator(
-        n_per_dim=(nx, nx),
-        box_size=(BOX_SIZE, BOX_SIZE),
-        dim=2,
+        n_per_dim=(nx,) * dim,
+        box_size=(BOX_SIZE,) * dim,
+        dim=dim,
         nufft_splits=2,
         nufft_backend="auto",
     )
 
 
-def compute_spectrum_from_particles(r: np.ndarray, u: np.ndarray, nx: int) -> pd.DataFrame:
+def compute_spectrum_from_particles(
+    r: np.ndarray, u: np.ndarray, nx: int, dim: int
+) -> pd.DataFrame:
     """Get spectrum after converting particles to given grid."""
-    interpolator = _get_interpolator(nx)
-    r_src = np.asarray(r[:, :2])
-    u_src = np.asarray(u[:, :2])
+    interpolator = _get_interpolator(nx, dim=dim)
+    r_src = np.asarray(r[:, :dim])
+    u_src = np.asarray(u[:, :dim])
     start = time.time()
     # kolm2d_64:  MLS: 1.0s, Scipy: 0.8s, Spline: inf, NUFFT: 55s, DFT: inf
     # kolm2d_128: MLS: 1.3s, Scipy: 3.2s
@@ -77,20 +102,23 @@ def compute_spectrum_from_particles(r: np.ndarray, u: np.ndarray, nx: int) -> pd
     return pd.DataFrame({"k": k, "energy": spectrum_full[1 : nx // 2 + 1]})
 
 
-def get_ref_ekin() -> tuple[dict[str, np.ndarray], np.ndarray]:
+def get_ref_ekin(
+    ref_path: Path,
+    burnin_steps: int,
+    dim: int,
+    ref_traj_ids=REF_TRAJ_IDS,
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """Extract Ekin from diagnostics.csv files."""
     ekin = []
     last_df = None
-    for idx in REF_TRAJ_IDS:
-        df = pd.read_csv(REF_PATH / f"traj_{idx}/diagnostics.csv")
+    for idx in ref_traj_ids:
+        df = pd.read_csv(ref_path / f"traj_{idx}/diagnostics.csv")
         ekin.append(df["ekin"].to_numpy())
         last_df = df
 
-    if last_df is None:
-        raise FileNotFoundError(f"No reference diagnostics found in {REF_PATH}")
-
-    time = last_df["time"].to_numpy()[REF_BURNIN:] - 4.5
-    ekin = np.array(ekin)[:, REF_BURNIN:]
+    time = last_df["time"].to_numpy()[burnin_steps:] - last_df["time"].to_numpy()[burnin_steps]
+    ekin = np.array(ekin)[:, burnin_steps:]
+    ekin *= BOX_SIZE**dim  # during dataset generation, Ekin is not scaled by volume
     return _stats(ekin), time
 
 
@@ -124,22 +152,30 @@ def get_spectra(
     return out_files
 
 
-def _state_spectrum(file: Path) -> pd.DataFrame:
+def list_cached_spectra(trajs: list[Path]) -> list[Path | None]:
+    return [_latest_file(traj, "spectrum_*.csv", _step_from_spectrum_name) for traj in trajs]
+
+
+def _state_spectrum(file: Path, dim: int) -> pd.DataFrame:
     """Load .bin state and compute its spectrum."""
     state = load_state(file)
-    return compute_spectrum_from_particles(r=state["x"], u=state["u"], nx=int(state["nx"]))
+    return compute_spectrum_from_particles(
+        r=state["x"], u=state["u"], nx=int(state["nx"]), dim=dim
+    )
 
 
-def _ref_spectrum(file: Path) -> pd.DataFrame:
+def _ref_spectrum(file: Path, dim: int) -> pd.DataFrame:
     """Load .h5 file and compute its spectrum."""
     with h5py.File(file, "r") as data:
         r = np.asarray(data["r"])
         u = np.asarray(data["u"])
-    nx = int(round(np.sqrt(len(r))))
-    return compute_spectrum_from_particles(r=r, u=u, nx=nx)
+    nx = _infer_n_per_dim(len(r), dim=dim)
+    return compute_spectrum_from_particles(r=r, u=u, nx=nx, dim=dim)
 
 
-def load_spectra_stats(spectrum_files: list[Path]) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+def load_spectra_stats(
+    spectrum_files: list[Path | None],
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Load kolm2d_{nx}/spectrum_*.csv files."""
     spectra = []
     k = None
@@ -153,14 +189,13 @@ def load_spectra_stats(spectrum_files: list[Path]) -> tuple[np.ndarray, dict[str
             raise ValueError(f"Incompatible k-axis in {file}")
         spectra.append(e_i)
 
-    if not spectra or k is None:
-        raise ValueError("No spectra found")
-
     spectra_arr = np.array(spectra)
     return k, _stats(spectra_arr)
 
 
-def plot_ekin(save_dir: Path, trajs: list[Path]) -> None:
+def plot_ekin(
+    save_dir: Path, trajs: list[Path], ref_path: Path, dim: int, burnin_steps_dns: int
+) -> None:
     """Plot Ekin min/max/median over the test trajs."""
     trajs_ekin = []
     time = None
@@ -170,11 +205,8 @@ def plot_ekin(save_dir: Path, trajs: list[Path]) -> None:
         if time is None:
             time = df["time"].to_numpy()
 
-    if not trajs_ekin or time is None:
-        raise FileNotFoundError(f"No diagnostics found under {save_dir}")
-
     ekin_stats = _stats(np.array(trajs_ekin))
-    ekin_ref, t_ref = get_ref_ekin()
+    ekin_ref, t_ref = get_ref_ekin(ref_path, burnin_steps=burnin_steps_dns, dim=dim)
 
     fig, ax = plt.subplots(layout="constrained")
     ax.plot(t_ref, ekin_ref["med"], "k", label="Reference")
@@ -183,28 +215,49 @@ def plot_ekin(save_dir: Path, trajs: list[Path]) -> None:
     ax.fill_between(time, ekin_stats["min"], ekin_stats["max"], alpha=0.2)
     ax.set_xlabel("Time")
     ax.set_ylabel("Kinetic energy")
+    if dim == 3:
+        ax.set_yscale("log")
     ax.legend()
     fig.savefig(save_dir / "ekin.png")
     plt.close(fig)
 
 
-def plot_spectra(save_dir: Path, trajs: list[Path], recompute: bool = False) -> None:
-    """Plot spectral min/max/median over the test trajs."""
-    run_spectra_files = get_spectra(
+def compute_spectra(
+    trajs: list[Path],
+    dim: int,
+    run_pattern: str,
+    ref_path: Path,
+    ref_pattern: str,
+    ref_traj_ids=REF_TRAJ_IDS,
+) -> None:
+    """Compute and cache `spectrum_*.csv` for run and reference trajectories."""
+    get_spectra(
         trajs,
-        "state_step_*.bin",
+        run_pattern,
         _step_from_name,
-        _state_spectrum,
-        recompute=recompute,
+        lambda file: _state_spectrum(file, dim=dim),
+        recompute=True,
     )
-    ref_trajs = [REF_PATH / f"traj_{idx}" for idx in REF_TRAJ_IDS]
-    ref_spectra_files = get_spectra(
+    ref_trajs = [ref_path / f"traj_{idx}" for idx in ref_traj_ids]
+    get_spectra(
         ref_trajs,
-        "com/step_*.h5",
-        _step_from_h5_name,
-        _ref_spectrum,
-        recompute=recompute,
+        ref_pattern,
+        _step_from_filename,
+        lambda file: _ref_spectrum(file, dim=dim),
+        recompute=True,
     )
+
+
+def plot_spectra(
+    save_dir: Path,
+    trajs: list[Path],
+    ref_path: Path,
+    ref_traj_ids=REF_TRAJ_IDS,
+) -> None:
+    """Plot spectral min/max/median over the test trajs from cached spectrum CSV files."""
+    run_spectra_files = list_cached_spectra(trajs)
+    ref_trajs = [ref_path / f"traj_{idx}" for idx in ref_traj_ids]
+    ref_spectra_files = list_cached_spectra(ref_trajs)
 
     k_ref, ref_stats = load_spectra_stats(ref_spectra_files)
     k_run, run_stats = load_spectra_stats(run_spectra_files)
@@ -224,14 +277,32 @@ def plot_spectra(save_dir: Path, trajs: list[Path], recompute: bool = False) -> 
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Analyse Kolm2d output directory")
+    parser = argparse.ArgumentParser(description="Analyse Kolm2d/HIT3d output directory")
     parser.add_argument("--path", type=Path, required=True, help="Path to a save directory")
-    parser.add_argument("--recompute-spectra", action="store_true", help="New spectrum_*.csv.")
+    parser.add_argument("--case", type=str, choices=tuple(CASE_CONFIGS.keys()), required=True)
+    parser.add_argument(
+        "--ref-path", type=Path, required=True, help="Path to reference DNS dataset"
+    )
+    parser.add_argument(
+        "--burnin-steps-dns", type=int, default=0, help="Burn-in steps for reference diagnostics"
+    )
+    parser.add_argument(
+        "--recompute-spectra",
+        action="store_true",
+        help="Only recompute spectrum_*.csv for run and reference; skip plotting.",
+    )
     args = parser.parse_args()
 
+    case = CASE_CONFIGS[args.case]
     trajs = sorted(args.path.glob("traj_*/"))
-    if not trajs:
-        raise FileNotFoundError(f"No trajectories found in {args.path}")
 
-    plot_ekin(args.path, trajs)
-    plot_spectra(args.path, trajs, recompute=args.recompute_spectra)
+    if args.recompute_spectra:
+        compute_spectra(
+            trajs=trajs,
+            dim=case.dim,
+            run_pattern=case.run_pattern,
+            ref_path=args.ref_path,
+            ref_pattern=case.ref_pattern,
+        )
+    plot_ekin(args.path, trajs, args.ref_path, case.dim, args.burnin_steps_dns)
+    plot_spectra(args.path, trajs, args.ref_path)

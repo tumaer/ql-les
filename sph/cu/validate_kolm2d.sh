@@ -15,12 +15,12 @@ bash -c "source /usr/local/cuda-12.1.sh && nvcc -O3 -std=c++17 solver.cu -o buil
 for resolution in 64 128 256 512; do
     # Step 1: relaxation pass
     ./build/solver --config cfg/kolm2d_${resolution}_init.conf
-    python analyse.py --type kolm2d --path res/kolm2d_${resolution}_init
+    python analyse.py --case kolm2d --path res/kolm2d_${resolution}_init
 
     # Step 2: inject the Kolmogorov velocity field onto the relaxed frames
     # Requires following data: res/kolm2d/traj_{15..19}/u_512_04500_burnin.bin
     cp -r res/kolm2d/. res/kolm2d_${resolution}
-    python init_u_kolm.py --src_u "res/kolm2d_${resolution}" \
+    python init_u_kolm_or_hit.py --src_u "res/kolm2d_${resolution}" \
       --src_pos "res/kolm2d_${resolution}_init/state_step_00002000.bin"
 
     # Step 3: trajectory runs
@@ -28,10 +28,15 @@ for resolution in 64 128 256 512; do
         ./build/solver --config cfg/kolm2d_${resolution}.conf \
           --save_dir res/kolm2d_${resolution}/traj_${traj} \
           --init_state_file res/kolm2d_${resolution}/traj_${traj}/relaxed_state.bin
-        python analyse.py --type kolm2d --path res/kolm2d_${resolution}/traj_${traj}
+        python analyse.py --case kolm2d --path res/kolm2d_${resolution}/traj_${traj}
         echo "    Finished Nx=${resolution} traj=${traj}"
     done
 
-    python analyse_kolm2d.py --path res/kolm2d_${resolution}
+    python analyse_kolm_hit.py --case kolm2d --path res/kolm2d_${resolution} \
+      --ref-path /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1 \
+      --burnin-steps-dns 45 --recompute-spectra
     echo "Finished Nx=${resolution}"
 done
+
+python analyse_kolm_hit_2.py --case kolm2d --path res --burnin-steps-dns 45 \
+  --ref-path /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1

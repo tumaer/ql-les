@@ -25,7 +25,7 @@ def plt_field_2d(state: dict, fig_dir: Path = Path("fig"), vref=1) -> None:
     plt.close(fig)
 
 
-def plt_epsilon_tgv2d(states, fig_dir):
+def plt_epsilon_tgv3d(states, fig_dir):
     """Plot kinetic energy dissipation rate.
     Compare SPH against reference from ref_tgv3d_Re100.csv [time, epsilon] every dt=0.1
     """
@@ -54,27 +54,27 @@ def plt_epsilon_tgv2d(states, fig_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyse tgv_cuda output directory")
-    parser.add_argument("--type", type=str, help="Type of field, e.g., tgv2d/tgv3d")
+    parser.add_argument("--case", type=str, help="Type of field, e.g., tgv2d/tgv3d")
     parser.add_argument("--path", type=Path, help="Path to a save directory")
     args = parser.parse_args()
 
     assert args.path.is_dir()
 
-    if args.type == "tgv2d" or args.type == "kolm2d":
-        states = load_states(args.path)
-        df = pd.read_csv(args.path / "diagnostics.csv")
+    states = load_states(args.path)
+    df = pd.read_csv(args.path / "diagnostics.csv")
 
-        fig_dir = args.path / "fig"
-        fig_dir.mkdir(exist_ok=True, parents=True)
+    fig_dir = args.path / "fig"
+    fig_dir.mkdir(exist_ok=True, parents=True)
+    t = df["time"].values
 
+    if args.case == "tgv2d" or args.case == "kolm2d":
         # uref column is only present for 2-D runs
         uref = df["uref"].values if "uref" in df.columns else None
-        t = df["time"].values
         plt_evolution(t, df["umax"].values, "umax", uref, fig_dir, yscale="log")
         plt_evolution(t, df["rho_max"].values, "rho_max", None, fig_dir)
         plt_evolution(t, df["ekin"].values, "ekin", None, fig_dir, yscale="log")
 
-        vref = {"tgv2d": 1, "kolm2d": 4}[args.type]
+        vref = {"tgv2d": 1, "kolm2d": 4}[args.case]
         if len(states) > 0:
             plt_field_2d(states[0], fig_dir, vref=vref)
         if len(states) > 2:
@@ -82,15 +82,11 @@ if __name__ == "__main__":
         if len(states) > 3:
             plt_field_2d(states[-1], fig_dir, vref=vref)
 
-    elif args.type == "tgv3d":
-        states = load_states(args.path)
-        df = pd.read_csv(args.path / "diagnostics.csv")
-
-        fig_dir = args.path / "fig"
-        fig_dir.mkdir(exist_ok=True, parents=True)
-
-        plt_evolution(df["time"].values, df["umax"].values, "umax", None, fig_dir)
-        plt_evolution(df["time"].values, df["rho_max"].values, "rho_max", None, fig_dir)
-        plt_epsilon_tgv2d(states, fig_dir)
+    elif args.case == "tgv3d" or args.case == "hit3d":
+        plt_evolution(t, df["umax"].values, "umax", None, fig_dir)
+        plt_evolution(t, df["ekin"].values, "ekin", None, fig_dir, "log")
+        plt_evolution(t, df["rho_max"].values, "rho_max", None, fig_dir)
+        if args.case == "tgv3d":
+            plt_epsilon_tgv3d(states, fig_dir)
     else:
         raise NotImplementedError
