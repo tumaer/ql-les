@@ -11,7 +11,6 @@ def compute_metrics(
     active_metrics,
     boundaries,
     pbc=True,
-    u_vel=False,
     metric_space="diff",
     most_recent_position=None,
 ):
@@ -19,18 +18,20 @@ def compute_metrics(
     Compute metrics for the given predictions and targets.
 
     Args:
-        predictions: Predicted positions or velocities.
-        targets: Ground truth positions or velocities.
+        predictions: Predicted positions or velocities of shape (T, N, D).
+        targets: Ground truth positions or velocities of shape (T, N, D).
         metadata: Dictionary containing metadata (e.g., dx).
         active_metrics: List of active metrics to compute.
         boundaries: Tensor containing boundary conditions.
         pbc: Whether to use periodic boundary conditions.
-        u_vel: Whether to use velocity updates.
+        metric_space: Space in which to compute metrics ("diff", "norm", "phys").
+        most_recent_position: The most recent position tensor for velocity computation.
 
     Returns:
         Dictionary containing computed metrics.
     """
-
+    if not pbc:
+        raise NotImplementedError("Currently not supported.")
     ### Explore MSE(pos) vs MSE(vel) ###
     ### Results: MSE(pos) accumulates much harder and we cannot compare with MSE(u)
     ### Results: We choose to work with MSE(v)
@@ -80,39 +81,37 @@ def compute_metrics(
     elif metric_space == "phys":
         dv /= metadata["dt"] * metadata["write_every"]
 
-    d_pos = v_p = wrap_displacement((predictions - targets), boundaries)
+    d_pos = wrap_displacement((predictions - targets), boundaries)
     computed_metrics = {}
     loss_ranges = [1, 5, 10, 20, 50, 100]
-    for metric_name in active_metrics:
-        if metric_name == "mse":
-            loss = (dv**2).mean(dim=(1, 2))
-            computed_metrics["mse"] = loss
-            for t in loss_ranges:
-                if t < predictions.shape[0]:  # Ensure valid range
-                    computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
-        elif metric_name == "mae":
-            loss = torch.abs(dv).mean(dim=(1, 2))
-            computed_metrics["mae"] = loss
-            for t in loss_ranges:
-                if t < predictions.shape[0]:
-                    computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range
-        elif metric_name == "e_kin":
-            computed_metrics["e_kin"] = compute_kinetic_energy(
-                ext_predictions, ext_targets, boundaries, metadata
-            )
-        elif metric_name == "mse_pos":
-            loss = (d_pos**2).mean(dim=(1, 2))
-            computed_metrics["mse_pos"] = loss
-            for t in loss_ranges:
-                if t < predictions.shape[0]:
-                    computed_metrics[f"mse{t}_pos"] = loss[:t]
+    if "mse" in active_metrics:  # MSE(v, v_target)
+        loss = (dv**2).mean(dim=(1, 2))
+        computed_metrics["mse"] = loss
+        for t in loss_ranges:
+            if t <= predictions.shape[0]:  # Ensure valid range
+                computed_metrics[f"mse{t}"] = loss[:t]  # Mean over time range
+    if "mae" in active_metrics:  # MAE(v, v_target)
+        loss = torch.abs(dv).mean(dim=(1, 2))
+        computed_metrics["mae"] = loss
+        for t in loss_ranges:
+            if t <= predictions.shape[0]:
+                computed_metrics[f"mae{t}"] = loss[:t]  # Mean over time range
+    if "e_kin" in active_metrics:
+        computed_metrics["e_kin"] = compute_kinetic_energy(
+            ext_predictions, ext_targets, boundaries, metadata
+        )
+    if "mse_pos" in active_metrics:
+        loss = (d_pos**2).mean(dim=(1, 2))
+        computed_metrics["mse_pos"] = loss
+        for t in loss_ranges:
+            if t <= predictions.shape[0]:
+                computed_metrics[f"mse{t}_pos"] = loss[:t]
 
     return computed_metrics
 
 
 def particle_mse(pred, target, non_kinematic_mask):
-    """
-    Compute the mean squared error for particles.
+    """Compute the mean squared error over particles. Used for training.
 
     Args:
         pred: Predicted positions tensor.
@@ -135,7 +134,6 @@ def compute_kinetic_energy(
     targets: torch.Tensor,
     boundaries: torch.Tensor,
     metadata: Dict,
-    stride: int = 1,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute Kinetic Energy with periodic boundary conditions.
@@ -145,7 +143,6 @@ def compute_kinetic_energy(
         targets: Ground truth positions tensor.
         boundaries: Tensor containing boundary conditions.
         metadata: Dictionary containing metadata (e.g., dt, dx, dim).
-        stride: Stride for computing velocities.
 
     Returns:
         Mean squared error of kinetic energy.
@@ -157,22 +154,17 @@ def compute_kinetic_energy(
 
     # Compute velocities for predictions and targets
     # Shape after subtraction: (time-1, nodes, dim)
-    velocity_pred = (
-        wrap_displacement(predictions[1::stride, :, :] - predictions[:-1:stride, :, :], boundaries)
-        / dt
-    )  # Divide by time step
-    velocity_target = (
-        wrap_displacement(targets[1::stride, :, :] - targets[:-1:stride, :, :], boundaries) / dt
-    )  # Divide by time step
+    vel_pred = wrap_displacement(predictions[1:] - predictions[:-1], boundaries) / dt
+    vel_target = wrap_displacement(targets[1:] - targets[:-1], boundaries) / dt
 
     # Compute kinetic energy
     # Squared velocities: (time-1, nodes, dim)
     # Summing over dim gives per-node KE: (time-1, dim)
-    e_kin_pred = (velocity_pred**2).sum(1) * (dx**dim)  # Multiply by volume element
-    e_kin_target = (velocity_target**2).sum(1) * (dx**dim)
+    e_kin_pred = (vel_pred**2).sum(-1) * (dx**dim)  # Multiply by volume element
+    e_kin_target = (vel_target**2).sum(-1) * (dx**dim)
 
     # Averages over time and nodes
-    e_kin_pred_mean = e_kin_pred.mean()  # Average over time and nodes
+    e_kin_pred_mean = e_kin_pred.mean()
     e_kin_target_mean = e_kin_target.mean()
 
     # Mean squared error

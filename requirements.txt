@@ -34,6 +34,7 @@ pytest          # tests
 python-dotenv
 pandas
 # sh            # for running bash commands in some tests (linux/macos only)
+finufft
 
 # --------- LagrangeBench --------- #
 h5py

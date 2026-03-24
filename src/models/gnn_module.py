@@ -516,11 +516,11 @@ class GNNSimulator(BaseSimulator):
             predicted_normalized_acceleration = self._encode_process_decode(
                 node_features, edge_index, e_features
             )
-            target_nomralized_acceleration = self._inverse_decoder_postprocessor(
+            target_normalized_acceleration = self._inverse_decoder_postprocessor(
                 next_position_adjusted, noisy_position_sequence, pbc
             )
 
-            return predicted_normalized_acceleration, target_nomralized_acceleration
+            return predicted_normalized_acceleration, target_normalized_acceleration
 
     # PBC compatible implementation
     def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):

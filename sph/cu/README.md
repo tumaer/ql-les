@@ -15,6 +15,6 @@ sbatch validate_tgv3d.sh
 sbatch validate_kolm2d.sh
 
 # All HIT test trajectories
-# At 32^3, 64^3, 128^3, 256^3
+# At 32^3, 64^3, 128^3
 sbatch validate_hit3d.sh
 ```

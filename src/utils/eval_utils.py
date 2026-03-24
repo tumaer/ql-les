@@ -254,7 +254,6 @@ def eval_single_rollout(
             active_metrics,
             features["bounds"].detach().cpu(),
             pbc=pbc,
-            u_vel=True,
             metric_space=metric_space,
             most_recent_position=features["enc_pos"][:, -1].detach().cpu(),
         )

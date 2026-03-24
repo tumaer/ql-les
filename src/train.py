@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
@@ -21,6 +22,8 @@ from src.utils.eval_utils import update_wandb_id
 load_dotenv(override=False)
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
 @task_wrapper
