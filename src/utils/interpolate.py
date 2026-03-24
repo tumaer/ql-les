@@ -13,6 +13,7 @@ class XsqinvKernel:
         self.cutoff = self._normalized_cutoff * h
 
     def w(self, r):
+        """Kernel weight."""
         res = 1 / (r * self._one_over_h) ** 2
         # if any r is zero, set corresponding res to a very large number
         if torch.any(r == 0):
@@ -37,6 +38,7 @@ class QuinticKernel:
             self._sigma = 3.0 / 359.0 / np.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         q = r * self._one_over_h
         q1 = torch.clamp(1.0 - q, min=0.0)
         q2 = torch.clamp(2.0 - q, min=0.0)
@@ -70,6 +72,8 @@ class Interpolator(torch.nn.Module):
         k=None,
         cutoff_factor=3,  # for Quintic
         kernel="quintic",  # "xsqinv" or "quintic"
+        mls_order=0,
+        mls_regularization=1e-6,
     ):
         super().__init__()
 
@@ -86,13 +90,33 @@ class Interpolator(torch.nn.Module):
             assert k is not None, "k must be provided for knn condition"
         self.k = k
         self.cutoff = cutoff_factor * dx
+        if mls_order not in (0, 1, 2):
+            raise ValueError(f"mls_order must be 0, 1, or 2, got {mls_order}")
+        self.mls_order = mls_order
+        self.mls_regularization = mls_regularization
 
         if kernel == "xsqinv":
             self.kernel_fn = XsqinvKernel(dx)
         elif kernel == "quintic":
             self.kernel_fn = QuinticKernel(self.cutoff / 3, dim=self.dim)
 
+    def _basis(self, dr_ij):
+        """Basis functions for MLS interpolation. Returns a tensor of shape (n_edges, n_basis)."""
+        ones = torch.ones((dr_ij.shape[0], 1), dtype=dr_ij.dtype, device=dr_ij.device)
+        if self.mls_order == 0:
+            return ones
+        if self.mls_order == 1:
+            return torch.cat([ones, dr_ij], dim=1)
+        if self.dim == 2:
+            x, y = dr_ij[:, 0], dr_ij[:, 1]
+            quad = torch.stack([x * x, y * y, 2.0 * x * y], dim=1)
+        else:
+            x, y, z = dr_ij[:, 0], dr_ij[:, 1], dr_ij[:, 2]
+            quad = torch.stack([x * x, y * y, z * z, 2.0 * x * y, 2.0 * x * z, 2.0 * y * z], dim=1)
+        return torch.cat([ones, dr_ij, quad], dim=1)
+
     def displ_fn(self, r1, r2):
+        """Displacement function wrapper."""
         return displ_fn(r1, r2, self.domain_size, self.is_periodic)
 
     def __call__(self, r, r_target, f, npptr=None, npptr_target=None):
@@ -135,17 +159,28 @@ class Interpolator(torch.nn.Module):
         r_i, r_j = r_target[i_s], r[j_s]
         dr_ij = self.displ_fn(r_i, r_j)
         dist = torch.norm(dr_ij, dim=-1)
-
         # Compute weights
         w_dist = self.kernel_fn.w(dist)
         w_dist_sum = scatter_add(w_dist, i_s, dim=0, dim_size=len(r_target))
 
         # Interpolate
-        num_targets = r_target.shape[0]  # Shape (M, D)
-        f_interp = scatter_add(
-            w_dist[:, None] * f[j_s], i_s, dim=0, dim_size=num_targets
-        )  # TODO: check j_s
-        f_interp /= w_dist_sum[:, None]
+        num_targets = r_target.shape[0]
+        if self.mls_order == 0:
+            f_interp = scatter_add(w_dist[:, None] * f[j_s], i_s, dim=0, dim_size=num_targets)
+            f_interp /= w_dist_sum[:, None]
+        else:
+            p_vals = self._basis(dr_ij)
+            mat_size = p_vals.shape[1]
+            mat_contrib = w_dist[:, None, None] * (p_vals[:, :, None] * p_vals[:, None, :])
+            mat = scatter_add(mat_contrib, i_s, dim=0, dim_size=num_targets)
+            eye = torch.eye(mat_size, dtype=mat.dtype, device=mat.device)
+            mat = mat + self.mls_regularization * eye[None, :, :]
+
+            vec_contrib = w_dist[:, None, None] * p_vals[:, :, None] * f[j_s][:, None, :]
+            vec = scatter_add(vec_contrib, i_s, dim=0, dim_size=num_targets)
+
+            coeff = torch.linalg.pinv(mat) @ vec
+            f_interp = coeff[:, 0, :]
         # assert no nan or inf numbers
         assert torch.all(torch.isfinite(f_interp)), "Interpolation resulted in NaN or Inf values"
         assert torch.all(w_dist_sum > 0), "Interpolation resulted in zero weights"
@@ -166,6 +201,8 @@ class GridInterpolator(Interpolator):
         k=None,
         cutoff_factor=2,
         kernel="quintic",
+        mls_order=0,
+        mls_regularization=1e-6,
     ):
         super().__init__(
             is_periodic,
@@ -176,6 +213,8 @@ class GridInterpolator(Interpolator):
             k=k,
             cutoff_factor=cutoff_factor,
             kernel=kernel,
+            mls_order=mls_order,
+            mls_regularization=mls_regularization,
         )
 
         grid = gen_grid_points([round(d / dx) for d in domain_size], domain_size)
@@ -203,6 +242,7 @@ class GridInterpolator(Interpolator):
             )
         else:
             r_target = self.grid
+            npptr_target = None
 
         return super().__call__(r, r_target, f, npptr=npptr, npptr_target=npptr_target)
 

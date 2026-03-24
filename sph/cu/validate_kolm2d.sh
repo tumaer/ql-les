@@ -34,7 +34,7 @@ for resolution in 64 128 256 512; do
 
     python analyse_kolm_hit.py --case kolm2d --path res/kolm2d_${resolution} \
       --ref-path /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1 \
-      --burnin-steps-dns 45 --recompute-spectra
+      --burnin-steps-dns 45 --recompute-spectra --recompute-corr
     echo "Finished Nx=${resolution}"
 done
 

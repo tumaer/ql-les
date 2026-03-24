@@ -5,14 +5,12 @@ from functools import partial
 import matplotlib.pyplot as plt
 import numpy as np
 from jax import config
+import jax.numpy as jnp
 
-from src.utils.jax_utils.vis_utils import (
-    energy_spectrum,
-    mls_2nd_order,
-    pos_init_cartesian_2d,
-    read_h5,
-)
-from src.utils.data_utils import load_metadata
+from src.utils.jax_utils.jax_spectral import energy_spectrum
+from src.utils.jax_utils.jax_mls import mls
+from src.utils.nbrs_utils import pos_init_cartesian_2d
+from src.utils.data_utils import load_metadata, read_h5
 
 config.update("jax_platforms", "cpu")
 
@@ -40,16 +38,17 @@ class EkinSpectrumComputer:
 
         self.k_axis = np.arange(1, Nx // 2 + 1)
         if dim == 2:
-            self.r_target = pos_init_cartesian_2d(box_size, dx)
+            self.r_target = jnp.array(pos_init_cartesian_2d(box_size, dx))
         elif dim == 3:
             raise NotImplementedError("3D case is not implemented yet")
 
         self.mls_fn = partial(
-            mls_2nd_order,
+            mls,
             r_target=self.r_target,
             box_size=box_size,
             dx=dx,
             dim=dim,
+            order=2,
             kernel_name="Quintic",
             h_factor=0.8,
         )

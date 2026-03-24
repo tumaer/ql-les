@@ -33,10 +33,10 @@ for resolution in 32 64 128; do
     done
 
     python analyse_kolm_hit.py --case hit3d --path res/hit3d_${resolution} \
-      --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_20kevery1 \
-      --burnin-steps-dns 250 --recompute-spectra
+      --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_25kevery1 \
+      --burnin-steps-dns 250 --recompute-spectra --recompute-corr
     echo "Finished Nx=${resolution}"
 done
 
 python analyse_kolm_hit_2.py --case hit3d --path res --burnin-steps-dns 250 \
-  --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_20kevery1
+  --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_25kevery1

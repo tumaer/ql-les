@@ -124,7 +124,7 @@ def _nearest_batch(
         )
         if condition == "radius":
             edge_index = radius(
-                x=x, y=query, r=cutoff, batch_x=batch_ids, batch_y=batch_y, max_num_neighbors=300
+                x=x, y=query, r=cutoff, batch_x=batch_ids, batch_y=batch_y, max_num_neighbors=1000
             )
         elif condition == "knn":
             edge_index = knn(x=x, y=query, k=k, batch_x=batch_ids, batch_y=batch_y)
@@ -132,7 +132,7 @@ def _nearest_batch(
         # this implementation is eventually faster than setting query=x
         if condition == "radius":
             edge_index = radius_graph(
-                x, r=cutoff, batch=batch_ids, loop=add_self_edges, max_num_neighbors=300
+                x, r=cutoff, batch=batch_ids, loop=add_self_edges, max_num_neighbors=1000
             )
         elif condition == "knn":
             edge_index = knn_graph(x, k=k, batch=batch_ids, loop=add_self_edges)
@@ -192,7 +192,7 @@ def _nearest_batch_pbc(
             r=cutoff,
             batch_x=batch_x,
             batch_y=batch_y,
-            max_num_neighbors=300,
+            max_num_neighbors=1000,
         )
     elif condition == "knn":
         edge_index = knn(

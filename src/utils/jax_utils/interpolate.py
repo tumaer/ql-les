@@ -7,7 +7,7 @@ from numpy import array
 from scipy.sparse.linalg import LinearOperator, cg
 from scipy.interpolate import RBFInterpolator, RegularGridInterpolator, griddata
 
-from src.utils.jax_utils.jax_mls import mls_2nd_order
+from src.utils.jax_utils.jax_mls import mls
 
 
 def pos_init_cartesian(box_size: array, n_per_dim: Sequence[int]):
@@ -69,6 +69,7 @@ class ParticleGridInterpolator:
         box_size,
         dim=3,
         mls_kernel="Quintic",
+        mls_order=2,
         mls_h_factor=0.8,
         mls_regularization=1e-10,
         nufft_splits=64,
@@ -104,6 +105,9 @@ class ParticleGridInterpolator:
         self.dx = float(np.mean(self.dx_vec))
 
         self.mls_kernel = mls_kernel
+        if mls_order not in (0, 1, 2):
+            raise ValueError("mls_order must be 0, 1 or 2")
+        self.mls_order = int(mls_order)
         self.mls_h_factor = mls_h_factor
         self.mls_regularization = mls_regularization
 
@@ -180,7 +184,7 @@ class ParticleGridInterpolator:
         return u
 
     def p2g_mls(self, r_src, u_r):
-        """Particles -> grid using 2nd-order MLS per vector component.
+        """Particles -> grid using MLS per vector component.
 
         Time complexity:
             `O(D * (Np log Np + Ng log Np + Ng * k))`
@@ -190,13 +194,14 @@ class ParticleGridInterpolator:
         """
         r_src, u_r = self._validate_particle_field(r_src, u_r)
         components = [
-            mls_2nd_order(
+            mls(
                 r=r_src,
                 r_target=self.grid_points,
                 f=u_r[:, i],
                 box_size=self.box_size,
                 dx=self.dx,
                 dim=self.dim,
+                order=self.mls_order,
                 kernel_name=self.mls_kernel,
                 h_factor=self.mls_h_factor,
                 regularization=self.mls_regularization,
@@ -207,7 +212,7 @@ class ParticleGridInterpolator:
         return u_grid
 
     def g2p_mls(self, r_target, u):
-        """Grid -> particles using 2nd-order MLS per vector component.
+        """Grid -> particles using MLS per vector component.
 
         Time complexity:
             `O(D * (Ng log Ng + Np log Ng + Np * k))`
@@ -220,13 +225,14 @@ class ParticleGridInterpolator:
 
         u_flat = u.reshape(self.dim, -1)
         components = [
-            mls_2nd_order(
+            mls(
                 r=self.grid_points,
                 r_target=r_target,
                 f=u_flat[i],
                 box_size=self.box_size,
                 dx=self.dx,
                 dim=self.dim,
+                order=self.mls_order,
                 kernel_name=self.mls_kernel,
                 h_factor=self.mls_h_factor,
                 regularization=self.mls_regularization,
@@ -613,7 +619,7 @@ if __name__ == "__main__":
         """Example 2D/3D field."""
         out = np.zeros((points.shape[0], dim), dtype=float)
         out[:, 0] = np.sin(points[:, 0])
-        out[5, 0] = 1.0  # test boundary condition handling
+        # out[5, 0] = 1.0  # test boundary condition handling
         out[:, 1] = np.cos(points[:, 1])
         if dim == 3:
             out[:, 2] = np.sin(points[:, 2])
