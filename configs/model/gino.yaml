@@ -10,7 +10,7 @@ net:
   model_name: "gino" # gino, interp_fno
   isotropic_norm: false
   noise_std: 3.0e-4
-  metadata_path: ${data.data_dir}/metadata.json
+  metadata_path: ${data.data_dir}/${data.metadata_file}
   return_x_grid: false
   ### GINO kwargs
   in_gno_transform_type: linear
@@ -51,7 +51,7 @@ optimizer:
 scheduler:
   _target_: torch.optim.lr_scheduler.StepLR
   _partial_: true
-  step_size: 200_000
+  step_size: 140_000
   gamma: 0.5
 
 # Set whether to compile the model

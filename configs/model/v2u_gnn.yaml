@@ -11,7 +11,7 @@ net:
   latent_dim: 64
   num_message_passing_steps: 5
   noise_std: 0.0
-  metadata_path: ${data.data_dir}/metadata.json
+  metadata_path: ${data.data_dir}//${data.metadata_file}
   isotropic_norm: false
   mlp_num_layers: 1
   mlp_hidden_dim: 64
@@ -26,7 +26,7 @@ optimizer:
 scheduler:
   _target_: torch.optim.lr_scheduler.StepLR
   _partial_: true
-  step_size: 200_000
+  step_size: 140_000
   gamma: 0.5
 
 # Set whether to compile the model

@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - override /data: hit3d_25k
+  - override /trainer: gpu
+  - override /vars: hit3d
+  - override /callbacks: default
+  - override /logger: wandb
+
+trainer:
+  max_steps: 100_000
+  log_every_n_steps: 500
+  val_check_interval: 5_000
+
+model:
+  scheduler:
+    step_size: 25_000
+
+seed: 12345

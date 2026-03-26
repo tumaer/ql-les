@@ -14,7 +14,7 @@ net:
   noise_std: 0.0
   num_particle_types: 1
   particle_type_embedding_size: 0
-  metadata_path: ${data.data_dir}/metadata.json
+  metadata_path: ${data.data_dir}/${data.metadata_file}
   alpha_u: ${model.alpha_u}
   alpha_field: ${model.alpha_field}
   vel_solver: ${model.vel_solver}
@@ -37,7 +37,7 @@ optimizer:
 scheduler:
   _target_: torch.optim.lr_scheduler.StepLR
   _partial_: true
-  step_size: 200_000
+  step_size: 140_000
   gamma: 0.5
 
 # Set whether to compile the model

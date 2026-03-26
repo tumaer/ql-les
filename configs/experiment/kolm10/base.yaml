@@ -6,4 +6,13 @@ defaults:
   - override /callbacks: default
   - override /logger: wandb
 
+data:
+  name: kolm10
+  every_n: 10
+  metadata_file: metadata_every10.json
+
+logger:
+  wandb:
+    project: "kolm10"
+
 seed: 12345

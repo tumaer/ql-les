@@ -159,9 +159,9 @@ def compute_kinetic_energy(
 
     # Compute kinetic energy
     # Squared velocities: (time-1, nodes, dim)
-    # Summing over dim gives per-node KE: (time-1, dim)
-    e_kin_pred = (vel_pred**2).sum(-1) * (dx**dim)  # Multiply by volume element
-    e_kin_target = (vel_target**2).sum(-1) * (dx**dim)
+    # Summing over particles and dim gives KE: (time-1,)
+    e_kin_pred = (vel_pred**2).sum(dim=(-1, -2)) * (dx**dim)  # Multiply by volume element
+    e_kin_target = (vel_target**2).sum(dim=(-1, -2)) * (dx**dim)
 
     # Averages over time and nodes
     e_kin_pred_mean = e_kin_pred.mean()
