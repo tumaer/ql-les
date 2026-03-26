@@ -16,13 +16,13 @@ from sph.cu.analyse_kolm_hit import (
     CORR_CSV_NAME,
     REF_TRAJ_IDS,
     SPECTRUM_CSV_NAME,
-    _infer_n_per_dim,
     _latest_file,
     _list_cached_metric,
     _ref_spectrum,
     _step_from_filename,
     _state_spectrum,
-    _stats,
+    infer_n_per_dim,
+    stats,
 )
 
 
@@ -125,7 +125,7 @@ def compute_spectra_for_all(
             if run_file is None or ref_file is None:
                 continue
             with h5py.File(ref_file, "r") as data:
-                nx_ref = _infer_n_per_dim(len(data["r"]), dim=case.dim)
+                nx_ref = infer_n_per_dim(len(data["r"]), dim=case.dim)
 
             _state_spectrum(run_file, dim=case.dim, nx=nx_ref).to_csv(
                 run_traj / SPECTRUM_CSV_NAME, index=False
@@ -163,7 +163,7 @@ def plot_ekin_and_spectra(
     ekin_ref_values, t_ref = _load_ref_ekin_values(
         ref_path=ref_path, burnin_steps=burnin_steps_dns, dim=case.dim, ref_traj_ids=ref_traj_ids
     )
-    ekin_ref = _stats(ekin_ref_values)
+    ekin_ref = stats(ekin_ref_values)
     plot_data["ekin"]["ref"] = {"x": t_ref, "values": ekin_ref_values}
     ax_ekin.plot(t_ref, ekin_ref["med"], "k", label="DNS")
     ax_ekin.fill_between(t_ref, ekin_ref["min"], ekin_ref["max"], color="k", alpha=0.2)
@@ -171,7 +171,7 @@ def plot_ekin_and_spectra(
     # Reference spectrum (raw for JSON; stats for plotting)
     ref_spectrum_files = _list_cached_metric(ref_trajs, SPECTRUM_CSV_NAME)
     k_ref, ref_values = _load_raw_metric(ref_spectrum_files, x_col="k", y_col="energy")
-    ref_stats = _stats(ref_values)
+    ref_stats = stats(ref_values)
     plot_data["spectrum"]["ref"] = {"x": k_ref, "values": ref_values}
     ax_spectrum.plot(k_ref, ref_stats["med"], "k", label="DNS")
     ax_spectrum.fill_between(k_ref, ref_stats["min"], ref_stats["max"], color="k", alpha=0.2)
@@ -184,14 +184,14 @@ def plot_ekin_and_spectra(
         t_corr, corr_values = _load_raw_metric(corr_files, x_col="time", y_col="corr")
         # Shift so that t=0 value is 1 on average. Diff due to particle interpolation
         # corr_values = corr_values + 1 - corr_values[:, 0].mean()
-        corr_stats = _stats(corr_values)
+        corr_stats = stats(corr_values)
         plot_data["corr"]["pred"][nx] = {"x": t_corr, "values": corr_values}
         ax_corr.plot(t_corr, corr_stats["med"], label=rf"SPH, {nx}$^{case.dim}$")
         ax_corr.fill_between(t_corr, corr_stats["min"], corr_stats["max"], alpha=0.2)
 
         # Plot Ekin
         ekin_values, time = _load_ekin_values(trajs)
-        ekin_stats = _stats(ekin_values)
+        ekin_stats = stats(ekin_values)
         plot_data["ekin"]["pred"][nx] = {"x": time, "values": ekin_values}
         ax_ekin.plot(time, ekin_stats["med"], label=rf"SPH, {nx}$^{case.dim}$")
         ax_ekin.fill_between(time, ekin_stats["min"], ekin_stats["max"], alpha=0.2)
@@ -199,7 +199,7 @@ def plot_ekin_and_spectra(
         # Plot spectrum (raw for JSON; stats for plotting)
         spectrum_files = _list_cached_metric(trajs, SPECTRUM_CSV_NAME)
         k, spectra_values = _load_raw_metric(spectrum_files, x_col="k", y_col="energy")
-        spectra_stats = _stats(spectra_values)
+        spectra_stats = stats(spectra_values)
         plot_data["spectrum"]["pred"][nx] = {"x": k, "values": spectra_values}
         ax_spectrum.plot(
             k_ref, spectra_stats["med"][: len(k_ref)], label=rf"SPH, {nx}$^{case.dim}$"

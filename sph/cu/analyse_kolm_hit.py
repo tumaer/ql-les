@@ -12,11 +12,15 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
 
 from utils import _step_from_name, load_state
-from src.utils.interpolate import GridInterpolator
-from src.utils.jax_utils.jax_spectral import energy_spectrum
+from src.utils.visualize import (
+    infer_n_per_dim,
+    interpolate_velocity_to_grid_mls2,
+    pearson_corr,
+    spectrum_from_grid,
+    stats,
+)
 
 BOX_SIZE = 2 * np.pi
 REF_TRAJ_IDS = range(15, 20)
@@ -44,23 +48,9 @@ CASE_CONFIGS = {
 }
 
 
-def _stats(arr: np.ndarray) -> dict[str, np.ndarray]:
-    """Extract min/max/median along axis=0."""
-    return {
-        "min": np.min(arr, axis=0),
-        "max": np.max(arr, axis=0),
-        "med": np.median(arr, axis=0),
-    }
-
-
 def _step_from_filename(file):
     """e.g.: "step_00000.h5" or "u_64_00000.npy"""
     return int(file.stem.split("_")[-1])
-
-
-def _infer_n_per_dim(n_particles: int, dim: int) -> int:
-    """Infer n_per_dim for a given number of particles and dimension, assuming a cubic grid."""
-    return int(round(n_particles ** (1.0 / dim)))
 
 
 def _latest_file(traj: Path, pattern: str, key: Callable[[Path], int]) -> Path | None:
@@ -69,81 +59,18 @@ def _latest_file(traj: Path, pattern: str, key: Callable[[Path], int]) -> Path |
     return files[-1] if files else None
 
 
-_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-_corr_interpolator_cache = {}
-
-
-def _get_interpolator(nx: int, dim: int) -> GridInterpolator:
-    """Interpolator wrapper with GPU support."""
-    key = (nx, dim)
-    if key not in _corr_interpolator_cache:
-        dx = BOX_SIZE / nx
-        domain_size = (BOX_SIZE,) * dim
-        interp = GridInterpolator(
-            is_periodic=True,
-            domain_size=domain_size,
-            dim=dim,
-            dx=dx,
-            condition="radius",
-            cutoff_factor=2,
-            kernel="quintic",
-            mls_order=2,
-        ).to(_device)
-        _corr_interpolator_cache[key] = interp
-    return _corr_interpolator_cache[key]
-
-
-def _interpolate_velocity_to_grid_mls2(
-    r: np.ndarray,
-    u: np.ndarray,
-    nx: int,
-    dim: int,
-) -> np.ndarray:
-    """Interpolate particle velocity field to Cartesian grid using torch MLS 2nd-order."""
-    interpolator = _get_interpolator(nx, dim=dim)
-    device = interpolator.grid.device
-
-    # Convert numpy to torch on device
-    r_src = torch.tensor(r[:, :dim], dtype=torch.float32, device=device)
-    u_src = torch.tensor(u[:, :dim], dtype=torch.float32, device=device)
-
-    # Interpolate to grid using quintic kernel on GPU
-    with torch.no_grad():
-        u_grid = interpolator(r=r_src, f=u_src)
-
-    # Reshape result from (grid_size, dim) to (dim, *n_per_dim)
-    n_per_dim = [nx] * dim
-    u_grid_np = u_grid.cpu().numpy()
-    u_grid_shaped = np.zeros((dim, *n_per_dim), dtype=np.float32)
-    for d in range(dim):
-        u_grid_shaped[d] = u_grid_np[:, d].reshape(n_per_dim)
-    return u_grid_shaped
-
-
-def _pearson_corr(a: np.ndarray, b: np.ndarray) -> float:
-    """Pearson correlation for flattened fields."""
-    a_flat = np.asarray(a).reshape(-1)
-    b_flat = np.asarray(b).reshape(-1)
-    a_centered = a_flat - np.mean(a_flat)
-    b_centered = b_flat - np.mean(b_flat)
-    denom = np.linalg.norm(a_centered) * np.linalg.norm(b_centered)
-    if denom == 0.0:
-        return 0.0
-    return float(np.dot(a_centered, b_centered) / denom)
-
-
 def compute_spectrum_from_particles(
     r: np.ndarray, u: np.ndarray, nx: int, dim: int
 ) -> pd.DataFrame:
     """Get spectrum after converting particles to given grid."""
     start = time.time()
-    u_grid = _interpolate_velocity_to_grid_mls2(r=r, u=u, nx=nx, dim=dim)
+    u_grid = interpolate_velocity_to_grid_mls2(r=r, u=u, nx=nx, dim=dim)
     print("P2G interpolation t=", time.time() - start)
-    spectrum_full = np.asarray(energy_spectrum(u_grid))
+    k_full, spectrum = spectrum_from_grid(u_grid)
     if not (nx & (nx - 1) == 0):  # If nx is not a power of two divide by 1.5
         nx = round(nx / 1.5)  # divide by 1.5 to undo the better spectrum trick
     k = np.arange(1, nx // 2 + 1)
-    return pd.DataFrame({"k": k, "energy": spectrum_full[1 : nx // 2 + 1]})
+    return pd.DataFrame({"k": k, "energy": spectrum[: len(k)]})
 
 
 def get_ref_ekin(
@@ -163,7 +90,7 @@ def get_ref_ekin(
     time = last_df["time"].to_numpy()[burnin_steps:] - last_df["time"].to_numpy()[burnin_steps]
     ekin = np.array(ekin)[:, burnin_steps:]
     ekin *= BOX_SIZE**dim  # during dataset generation, Ekin is not scaled by volume
-    return _stats(ekin), time
+    return stats(ekin), time
 
 
 def _list_cached_metric(trajs: list[Path], csv_name: str) -> list[Path | None]:
@@ -209,7 +136,7 @@ def _load_metric_stats(
         raise FileNotFoundError(missing_msg)
 
     values_arr = np.array(values)
-    return x_axis, _stats(values_arr)
+    return x_axis, stats(values_arr)
 
 
 def plot_ekin(
@@ -224,7 +151,7 @@ def plot_ekin(
         if time is None:
             time = df["time"].to_numpy()
 
-    ekin_stats = _stats(np.array(trajs_ekin))
+    ekin_stats = stats(np.array(trajs_ekin))
     ekin_ref, t_ref = get_ref_ekin(ref_path, burnin_steps=burnin_steps_dns, dim=dim)
 
     fig, ax = plt.subplots(layout="constrained")
@@ -259,10 +186,10 @@ def compute_spectra(
             continue
 
         with h5py.File(ref_file, "r") as data:
-            nx_ref = _infer_n_per_dim(len(data["r"]), dim=dim)
+            nx_ref = infer_n_per_dim(len(data["r"]), dim=dim)
 
         # Improve high wavenumber spectrum without using the full nx_run
-        nx_run = _infer_n_per_dim(len(load_state(run_file)["x"]), dim=dim)
+        nx_run = infer_n_per_dim(len(load_state(run_file)["x"]), dim=dim)
         nx = max(nx_ref, min(round(nx_ref * 1.5), nx_run))
 
         run_spectrum_path = run_traj / SPECTRUM_CSV_NAME
@@ -365,11 +292,11 @@ def compute_velocity_corr_csv(
                 r_ref = np.asarray(data["r"])
                 u_ref = np.asarray(data["u"])
 
-            nx_ref = _infer_n_per_dim(len(r_ref), dim=dim)
-            nx_run = _infer_n_per_dim(len(run_state["x"]), dim=dim)
+            nx_ref = infer_n_per_dim(len(r_ref), dim=dim)
+            nx_run = infer_n_per_dim(len(run_state["x"]), dim=dim)
 
             t1 = time.time()
-            u_run_grid = _interpolate_velocity_to_grid_mls2(
+            u_run_grid = interpolate_velocity_to_grid_mls2(
                 r=(run_state["x"] - BOX_SIZE / (nx_run * 2))
                 % BOX_SIZE,  # Shift run grid to align with reference
                 u=run_state["u"],
@@ -377,14 +304,14 @@ def compute_velocity_corr_csv(
                 dim=dim,
             )
             t2 = time.time()
-            u_ref_grid = _interpolate_velocity_to_grid_mls2(
+            u_ref_grid = interpolate_velocity_to_grid_mls2(
                 r=r_ref,
                 u=u_ref,
                 nx=nx_ref,
                 dim=dim,
             )
             t3 = time.time()
-            corr = _pearson_corr(u_run_grid, u_ref_grid)
+            corr = pearson_corr(u_run_grid, u_ref_grid)
             print(
                 f"P2G interp t_run={t2 - t1:.2f}s, t_ref={t3 - t2:.2f}s, corr={corr:.4f} "
                 f"for run {run_files[run_idx].name} vs ref {ref_files[ref_idx].name}"
