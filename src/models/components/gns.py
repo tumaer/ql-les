@@ -390,6 +390,8 @@ class EncodeProcessDecode(nn.Module):
         x, e_features = self._encoder(x, edge_index, e_features)
         x, e_features = self._processor(x, edge_index, e_features)
         x = self._decoder(x)
+        # preserve linear momentum
+        x -= x.mean(dim=0, keepdim=True)
         if self.alpha_u != 0:
             a_v, a_u = torch.chunk(x, 2, dim=-1)
             return a_v, a_u
