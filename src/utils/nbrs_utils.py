@@ -156,6 +156,30 @@ def _nearest_batch_pbc(
     if not add_self_edges:
         raise NotImplementedError("Self edges are always considered for now")
 
+    # Fast path: the training/eval setup commonly uses batch size 1.
+    # Build only periodic halo images that can contribute within `cutoff`
+    # instead of materializing all 3^D copies.
+    if (
+        condition == "radius"
+        and n_particles_per_trajectory.numel() == 1
+        and (query is None or (n_pptr_query is not None and n_pptr_query.numel() == 1))
+    ):
+        if cutoff is None:
+            raise ValueError("cutoff must be provided for radius")
+
+        if query is None:
+            query = x
+
+        combined_positions, sender_index = _pbc_halo_duplication_single(x, box, cutoff)
+        edge_index = radius(
+            x=combined_positions,
+            y=query,
+            r=cutoff,
+            max_num_neighbors=1000,
+        )
+        edge_index[1] = sender_index[edge_index[1]]
+        return edge_index
+
     device = x.device
     combined_positions, num_copies = pbc_duplication(x, box, n_particles_per_trajectory)
 
@@ -210,6 +234,49 @@ def _nearest_batch_pbc(
         edge_index[1][mask] = (local_idx % n_particles_per_trajectory[i]) + start
 
     return edge_index
+
+
+def _pbc_halo_duplication_single(x, box, cutoff):
+    """Duplicate only boundary halo particles for single-batch PBC radius search.
+
+    Returns:
+        combined_positions: (N + N_halo, D) with original points first.
+        sender_index: (N + N_halo,) mapping each combined point to its source index in x.
+    """
+    device = x.device
+    n, ndim = x.shape
+    box = box.to(dtype=x.dtype, device=device)
+    cutoff = torch.as_tensor(cutoff, dtype=x.dtype, device=device)
+
+    orig_idx = torch.arange(n, device=device, dtype=torch.long)
+    combined = [x]
+    source = [orig_idx]
+
+    shifts = torch.stack(
+        torch.meshgrid(
+            *[torch.tensor([-1, 0, 1], device=device) for _ in range(ndim)], indexing="ij"
+        ),
+        dim=-1,
+    ).reshape(-1, ndim)
+
+    for shift in shifts:
+        if torch.all(shift == 0):
+            continue
+
+        mask = torch.ones(n, dtype=torch.bool, device=device)
+        for d in range(ndim):
+            if shift[d] > 0:
+                mask &= x[:, d] < cutoff
+            elif shift[d] < 0:
+                mask &= x[:, d] > (box[d] - cutoff)
+
+        if mask.any():
+            combined.append(x[mask] + shift.to(dtype=x.dtype) * box)
+            source.append(orig_idx[mask])
+
+    combined_positions = torch.cat(combined, dim=0)
+    sender_index = torch.cat(source, dim=0)
+    return combined_positions, sender_index
 
 
 def pbc_duplication(x, box, n_particles_per_trajectory):
