@@ -519,11 +519,14 @@ class GNNSimulator(BaseSimulator):
             predicted_normalized_acceleration = self._encode_process_decode(
                 node_features, edge_index, e_features
             )
-            target_normalized_acceleration = self._inverse_decoder_postprocessor(
+            target_normalized_acceleration, v_prev, v_target = self._inverse_decoder_postprocessor(
                 next_position_adjusted, noisy_position_sequence, pbc
             )
-
-            return predicted_normalized_acceleration, target_normalized_acceleration
+            v_pred = v_prev + self._denorm(predicted_normalized_acceleration, "va")
+            return (predicted_normalized_acceleration, self._norm(v_pred, "vv")), (
+                target_normalized_acceleration,
+                self._norm(v_target, "vv"),
+            )
 
     # PBC compatible implementation
     def _inverse_decoder_postprocessor(self, next_position, position_sequence, pbc=True, **kwargs):
@@ -685,7 +688,7 @@ class GNNSimulator(BaseSimulator):
             # Compute acceleration
             v_acceleration = next_v_velocity - previous_v_velocity
             v_normalized_acceleration = self._norm(v_acceleration, "va")
-            return v_normalized_acceleration
+            return v_normalized_acceleration, previous_v_velocity, next_v_velocity
 
     def _integrate_accelerations(
         self, a_v_pred, position_sequence, pbc=True, a_u_pred=None, u_velocity=None
@@ -749,6 +752,7 @@ class GNNLitModule(BaseLitModule):
         alpha_u: float = 1.0,
         alpha_v: float = 1.0,
         alpha_field: float = 1.0,
+        alpha_ekin: float = 0.0,
         active_metrics: Dict[str, Any] = None,
         metric_space: Dict[str, str] = "norm",
         v2u_solver: str = "none",
@@ -777,6 +781,7 @@ class GNNLitModule(BaseLitModule):
         self.alpha_u = alpha_u
         self.alpha_v = alpha_v
         self.alpha_field = alpha_field
+        self.alpha_ekin = alpha_ekin
 
         # How to formulate the learning problem
         if alpha_u != 0:
@@ -877,8 +882,15 @@ class GNNLitModule(BaseLitModule):
             # TODO: add optional further models/losses for v2u_solver
         else:
             # Calculate loss
-            loss = particle_mse(pred, target, non_kinematic_mask)
-            self.log("train/loss_v", loss, **kwargs_log)
+            a_pred, v_pred = pred
+            a_target, v_target = target
+            a_loss = particle_mse(a_pred, a_target, non_kinematic_mask)
+            self.log("train/loss_v", a_loss, **kwargs_log)
+            loss = self.alpha_v * a_loss
+            if self.alpha_ekin != 0.0:
+                ekin_loss = ((v_pred**2).mean() - (v_target**2).mean()) ** 2
+                self.log("train/loss_ekin", ekin_loss, **kwargs_log)
+                loss += self.alpha_ekin * ekin_loss
 
         return loss
 
