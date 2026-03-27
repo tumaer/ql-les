@@ -70,12 +70,15 @@ class GNNSimulator(BaseSimulator):
 
         num_vs = input_seq_length - 1
         num_us = input_seq_length if alpha_u != 0 else 0
+        edge_in = self.dim + 1
+        if "dv" in self.node_features_type:
+            edge_in += self.dim + 1
 
         if model_name == "gns":
             self._encode_process_decode = EncodeProcessDecode(
                 node_in=self.dim * (num_vs + num_us) + particle_type_embedding_size,
                 node_out=self.dim if self.alpha_u == 0 else 2 * self.dim,  # acceleration(s)
-                edge_in=self.dim + 1,  # displacement and its magnitude
+                edge_in=edge_in,
                 latent_dim=latent_dim,
                 num_message_passing_steps=num_message_passing_steps,
                 mlp_num_layers=kwargs["mlp_num_layers"],

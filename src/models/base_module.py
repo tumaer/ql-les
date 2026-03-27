@@ -233,11 +233,13 @@ class BaseSimulator(nn.Module):
         if node_features_type is None:
             node_features_type = self.node_features_type
 
-        if "v" in node_features_type:
+        if "v" in node_features_type or "v1" in node_features_type or "dv" in node_features_type:
             v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
             # Normalized velocity sequence, merging spatial an time axis.
             v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
             v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
+            if "v1" in node_features_type:
+                v_flat_velocity_sequence = torch.zeros_like(v_flat_velocity_sequence)
             node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
 
         if "u" in node_features_type:
@@ -299,6 +301,17 @@ class BaseSimulator(nn.Module):
         r_ij /= self._connectivity_radius
         edge_features["normalized_relative_displacements"] = r_ij
         edge_features["normalized_relative_distances"] = torch.norm(r_ij, dim=1, keepdim=True)
+
+        if "dv" in node_features_type:
+            most_recent_v_velocity = time_diff(position_sequence, self._boundaries, pbc)[:, -1]
+            dv_ij = self._norm(
+                most_recent_v_velocity[senders] - most_recent_v_velocity[receivers],
+                key="vv",
+            )
+            edge_features["normalized_relative_velocities"] = dv_ij
+            edge_features["normalized_relative_velocity_distances"] = torch.norm(
+                dv_ij, dim=1, keepdim=True
+            )
 
         if self.model_name == "lles":
             EPS = 1e-6

@@ -377,6 +377,8 @@ class EncodeProcessDecode(nn.Module):
             for k in [  # define a fixed order for the node features
                 "normalized_relative_displacements",
                 "normalized_relative_distances",
+                "normalized_relative_velocities",
+                "normalized_relative_velocity_distances",
             ]
             if k in e_features
         ]
