@@ -163,6 +163,7 @@ class GNNSimulator(BaseSimulator):
             }
             # print(adjusted_state_dict["v2u_gnn._encoder.node_fn.0.0.weight"].device)
             self.v2u_gnn.load_state_dict(adjusted_state_dict, strict=False)
+            self.v2u_gnn.set_metadata_device(device)
             # print(self.v2u_gnn.v2u_gnn._encoder.node_fn[0][0].weight.device)
 
     def _decoder_postprocessor(self, a_v_pred, position_sequence, pbc=True, **kwargs):
@@ -347,12 +348,15 @@ class GNNSimulator(BaseSimulator):
             return next_position, new_u_velocity
         elif self.v2u_solver != "none":
             # u_velocity = kwargs["u_velocity"]
+            v2u_node_features_type = ["v"]
+            if "dv" in self.node_features_type:
+                v2u_node_features_type.append("dv")
             node_features, edge_index, e_features = self._build_graph_from_raw(
                 current_positions,
                 n_particles_per_trajectory,
                 particle_types,
                 pbc,
-                node_features_type=["v"],
+                node_features_type=v2u_node_features_type,
             )
             a_v_pred = self._encode_process_decode(node_features, edge_index, e_features)
 
@@ -374,11 +378,13 @@ class GNNSimulator(BaseSimulator):
                 # build graph consisting only of the newly predicted v velocities
                 node_features.pop("particle_type_embeddings", None)
                 node_features["v_flat_velocity_sequence"] = self._norm(new_v_velocity, "vv")
+                e_features.pop("normalized_relative_velocities", None)
+                e_features.pop("normalized_relative_velocity_distances", None)
 
                 # run gnn
                 # print(self.v2u_gnn.v2u_gnn._encoder.node_fn[0][0].weight.device)
                 a_u_pred = self.v2u_gnn.v2u_gnn(node_features, edge_index, e_features)
-                u_acceleration = a_u_pred  # / 5  # TODO: remove manual normalization
+                u_acceleration = self.v2u_gnn._denorm_avu(a_u_pred)
                 # u := v + u_acceleration
                 new_u_velocity = self._v2u(new_v_velocity) + u_acceleration
 
@@ -392,7 +398,10 @@ class GNNSimulator(BaseSimulator):
                 node_features, edge_index, e_features
             )
             next_position = self._decoder_postprocessor(
-                predicted_normalized_acceleration, current_positions, pbc
+                predicted_normalized_acceleration,
+                current_positions,
+                pbc,
+                n_part_per_traj=n_particles_per_trajectory,
             )
             return next_position
 
@@ -789,9 +798,13 @@ class GNNLitModule(BaseLitModule):
         if v2u_solver != "none":
             assert vel_solver == "simple", "v2u_solver is only implemented for vel_solver=simple."
             assert alpha_u == 0.0, "v2u_solver is only implemented for alpha_u = 0.0."
-        if (alpha_u != 0.0 or v2u_solver != "none") and ("KOLM" not in self.net._case):
+        if (
+            (alpha_u != 0.0 or v2u_solver != "none")
+            and ("KOLM" not in self.net._case)
+            and ("HIT" not in self.net._case)
+        ):
             raise NotImplementedError(
-                "Alpha_u > 0.0 and v2u_solver != 'none' are only implemented for Kolmogorov."
+                "Alpha_u > 0.0 and v2u_solver != 'none' are only implemented for Kolm/HIT."
             )
         self.vel_solver = vel_solver
         self.v2u_solver = v2u_solver
