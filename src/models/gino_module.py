@@ -208,13 +208,18 @@ class GINOSimulator(BaseSimulator):
         # Evolve u
         most_recent_u_velocity_norm = self._norm(most_recent_u_velocity, "uu")
         if self.model_name in ["gino", "interp_fno"]:
-            new_u_velocity_norm = self.network(
+            new_ua_norm = self.network(
                 input_geom=most_recent_position,  # (N, D)
                 latent_queries=self.latent_points,  # (G, G, D)
                 output_queries=new_position,  # (M, D)
                 x=most_recent_u_velocity_norm[None, ...],  # (B, N, FNO_IN_CHANNELS)
                 x_grid=kwargs.get("x_grid", None),  # (B, D, N,...N)
                 return_x_grid=self.return_x_grid,
+            )  # (B, N, D)
+            # remove external forces from the velocity field
+            new_ua_norm -= new_ua_norm.mean(dim=1, keepdim=True)
+            new_u_velocity_norm = most_recent_u_velocity_norm[None, ...] + self._norm(
+                self._denorm(new_ua_norm, "ua"), "uu"
             )
         elif self.model_name == "gns":
             node_features, edge_index, edge_features = self._build_graph_from_raw(
@@ -306,15 +311,17 @@ class GINOLitModule(BaseLitModule):
 
         if self.net.model_name == "gino":
             # Train GINO on `u`
-            u_pred_norm = self.net.network(
+            a_pred_norm = self.net.network(
                 input_geom=batch.enc_pos[:, -1],  # (N, D)
                 latent_queries=self.net.latent_points,  # (G, G, D)
                 output_queries=batch.target_pos[:, 0],  # (M, D)
                 x=u_in_norm[None, ...],  # (B, N, FNO_IN_CHANNELS)
             )[0]  # (B, M, FNO_OUT_CHANNELS); add and remove batching with [None, ...] and [0]
+            u_pred_norm = u_in_norm + self.net._norm(self.net._denorm(a_pred_norm, "ua"), "uu")
+
         elif self.net.model_name == "interp_fno":
             # Train InterpFNO on `u`
-            _, u_pred_norm = self.net.network(
+            _, a_pred_norm = self.net.network(
                 input_geom=batch.enc_pos[:, -1],  # (N, D)
                 latent_queries=self.net.latent_points,  # (G, G, D)
                 output_queries=batch.target_pos[:, 0],  # (M, D)
@@ -329,10 +336,11 @@ class GINOLitModule(BaseLitModule):
                 f=target_u_norm,
             )
             # reshape predictions from grid to points
-            u_pred_norm = u_pred_norm.squeeze(0)
-            u_pred_norm = u_pred_norm.permute(*torch.arange(u_pred_norm.ndim - 1, -1, -1))
+            a_pred_norm = a_pred_norm.squeeze(0)
+            a_pred_norm = a_pred_norm.permute(*torch.arange(a_pred_norm.ndim - 1, -1, -1))
             # (N,... N, D) -> (N*N..., D)
-            u_pred_norm = u_pred_norm.reshape(-1, u_pred_norm.shape[-1])
+            a_pred_norm = a_pred_norm.reshape(-1, a_pred_norm.shape[-1])
+            u_pred_norm = u_in_norm + self.net._norm(self.net._denorm(a_pred_norm, "ua"), "uu")
         elif self.net.model_name == "gns":
             node_features, edge_index, edge_features = self.net._build_graph_from_raw(
                 position_sequence=batch.enc_pos[:, -1:],  # (N, 1, D)
