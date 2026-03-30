@@ -20,14 +20,14 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW
-  lr: 1e-4 # TODO: ablate
+  lr: 3e-4
   weight_decay: 1.e-4
 
 scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
   _partial_: true
-  step_size: 140_000
-  gamma: 0.5
+  min_lr: 1e-6
+  max_steps: ${trainer.max_steps}
 
 # Set whether to compile the model
 compile: true

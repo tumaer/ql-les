@@ -35,10 +35,10 @@ optimizer:
 
 #Scheduler configuration
 scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
   _partial_: true
-  step_size: 140_000
-  gamma: 0.5
+  min_lr: 1e-6
+  max_steps: ${trainer.max_steps}
 
 # Set whether to compile the model
 compile: true

@@ -12,8 +12,27 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
     """
 
     def __init__(
-        self, optimizer, warmup_epochs, max_epochs, steps_per_epoch=1, min_lr=0.0, last_epoch=-1
+        self,
+        optimizer,
+        warmup_steps=0,
+        max_steps=None,
+        warmup_epochs=0,
+        max_epochs=None,
+        steps_per_epoch=1,
+        min_lr=0.0,
+        last_epoch=-1,
     ):
+        is_per_step = warmup_steps is not None and max_steps is not None
+        is_per_epoch = warmup_epochs is not None and max_epochs is not None
+        assert is_per_step or is_per_epoch, (
+            "Either warmup_epochs and max_epochs or warmup_steps and max_steps must be provided"
+        )
+        assert not (is_per_step and is_per_epoch), (
+            "Cannot provide both warmup_epochs and max_epochs and warmup_steps and max_steps"
+        )
+
+        self.warmup_steps = warmup_steps
+        self.max_steps = max_steps
         self.warmup_epochs = warmup_epochs
         self.max_epochs = max_epochs
 
@@ -23,9 +42,10 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
 
     def set_steps_per_epoch(self, steps_per_epoch):
         """Make the number of steps per epoch an attribute of the scheduler."""
+        if self.warmup_epochs is not None and self.max_epochs is not None:
+            self.warmup_steps = self.warmup_epochs * steps_per_epoch
+            self.max_steps = self.max_epochs * steps_per_epoch
         self.steps_per_epoch = steps_per_epoch
-        self.warmup_steps = self.warmup_epochs * self.steps_per_epoch
-        self.max_steps = self.max_epochs * self.steps_per_epoch
 
     def get_lr(self):
         """Compute the learning rate based on the current step."""

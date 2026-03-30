@@ -38,21 +38,12 @@ optimizer:
   lr: 1.0e-3
   weight_decay: 1.e-4
 
-# # Scheduler configuration
-# scheduler:
-#   _partial_: true
-#   _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
-#   optimizer: ${..optimizer} # Reference optimizer from the model configuration
-#   min_lr: 0.0001
-#   steps_per_epoch: 1
-#   warmup_epochs: 0
-#   max_epochs: 10
-
+#Scheduler configuration
 scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
   _partial_: true
-  step_size: 140_000
-  gamma: 0.5
+  min_lr: 1e-6
+  max_steps: ${trainer.max_steps}
 
 # Set whether to compile the model
 compile: true
