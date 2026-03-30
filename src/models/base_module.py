@@ -124,13 +124,24 @@ class BaseSimulator(nn.Module):
         """Convert displacement of positions `v` to velocity `u = (x1 - x0) / dt`."""
         return v / self._effective_dt
 
+    @staticmethod
+    def _infer_nx_from_particle_count(n_particles: int, dim: int) -> int:
+        """Infer grid resolution Nx from particle count, robust to float root precision."""
+        nx = round(n_particles ** (1.0 / dim))
+        while nx**dim < n_particles:
+            nx += 1
+        while (nx - 1) ** dim >= n_particles:
+            nx -= 1
+        return nx
+
     def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps, cfg=None):
         """Relax a point cloud in the exact same way as during dataset generation."""
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
+        nx = self._infer_nx_from_particle_count(r.shape[0], self.metadata["dim"])
         if not hasattr(self, "_relax_fn"):
             self._relax_fn = relax_wrapper(
-                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                Nx=nx,
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
@@ -147,7 +158,7 @@ class BaseSimulator(nn.Module):
             assert "is_tvf" in cfg, "cfg must contain 'is_tvf' key"
             if not hasattr(self, "_relax_fn_2"):
                 self._relax_fn_2 = relax_wrapper(
-                    Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                    Nx=nx,
                     dim=self.metadata["dim"],
                     L=self._boundaries[0].item(),
                     is_physical=True,
@@ -162,7 +173,6 @@ class BaseSimulator(nn.Module):
             if cfg.get("only_cfg", False) and (not cfg["active"]):
                 dt_factor = 0.0
 
-        dt_factor = dt_factor
         v = 0.0
         # r_input = r.detach().clone()
         for i in range(num_steps):
@@ -180,7 +190,7 @@ class BaseSimulator(nn.Module):
 
         if not hasattr(self, "_sph_fn"):
             self._sph_fn = relax_wrapper(
-                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                Nx=self._infer_nx_from_particle_count(r.shape[0], self.metadata["dim"]),
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
