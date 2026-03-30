@@ -44,6 +44,7 @@ def relax_wrapper(
     box=None,
     tvf_factor=1.0,
     separate_tvf=False,
+    is_clip_rho=True,
 ):
     """Compute pressure gradient term from NSE.
 
@@ -99,6 +100,10 @@ def relax_wrapper(
         w_dist = kernel_fn.w(dist)
 
         rho = mass * scatter_add(w_dist, i_s, dim=0, dim_size=N_tot)
+        if is_clip_rho:
+            # Following NeuralSPH (https://arxiv.org/abs/2402.06275), we clip density
+            rho = torch.clamp(rho, max=1.02 * rho_ref)
+            rho = torch.where(rho < 0.98 * rho_ref, rho_ref, rho)
         p = eos.p_fn(rho)
         if verbose:
             print(
