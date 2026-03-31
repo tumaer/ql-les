@@ -1,6 +1,8 @@
 """Utility functions for evaluation."""
 
 import os
+import time
+
 import pickle
 import numpy as np
 import torch
@@ -136,7 +138,10 @@ def eval_single_rollout(
     position_predictions = []
     device = current_positions.device
 
+    is_timing = os.environ.get("TIME_ROLLOUT", "0") == "1"
     if u_vel is False:
+        if is_timing:
+            t0 = time.time()
         for step in range(num_rollout_steps):
             next_position = simulator.predict_positions(
                 current_positions=current_positions,
@@ -152,6 +157,10 @@ def eval_single_rollout(
             current_positions = torch.cat(
                 [current_positions[:, 1:], next_position[:, None, :]], dim=1
             )
+        if is_timing:
+            if current_positions.is_cuda:
+                torch.cuda.synchronize(device=current_positions.device)
+            print(f"Traj (w/o u) simulated in {time.time() - t0:.2f} seconds.")
 
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
@@ -174,6 +183,8 @@ def eval_single_rollout(
         current_u_velocity = features["u_velocity"]  # initial u_velocity
         u_vel_predictions = []
         x_grid = None
+        if is_timing:
+            t0 = time.time()
         for step in range(num_rollout_steps):
             if hasattr(simulator, "_cfg_every"):
                 simulator.neuralsph.cfg["active"] = ((step + 1) % simulator._cfg_every) == 0
@@ -207,6 +218,11 @@ def eval_single_rollout(
             current_u_velocity = torch.cat(
                 [current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1
             )
+
+        if is_timing:
+            if current_positions.is_cuda:
+                torch.cuda.synchronize(device=current_positions.device)
+            print(f"Traj (w/ u) simulated in {time.time() - t0:.2f} seconds.")
 
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         u_vel_predictions = torch.stack(u_vel_predictions)  # (time, n_nodes, dim)
