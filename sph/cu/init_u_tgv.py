@@ -35,7 +35,7 @@ def tgv3d_u(x: np.ndarray) -> np.ndarray:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Write analytical velocity field")
-    parser.add_argument("--type", type=str, help="Type of field, e.g., tgv2d/tgv3d")
+    parser.add_argument("--case", type=str, help="Type of field, e.g., tgv2d/tgv3d")
     parser.add_argument("--src", type=Path, help="Path to a state_step file")
     args = parser.parse_args()
 
@@ -43,9 +43,9 @@ if __name__ == "__main__":
     dst = args.src.parent / "relaxed_state.bin"
 
     state = load_state(src)
-    if args.type == "tgv2d":
+    if args.case == "tgv2d":
         u_new = tgv2d_u(state["x"])
-    elif args.type == "tgv3d":
+    elif args.case == "tgv3d":
         u_new = tgv3d_u(state["x"])
     else:
         raise NotImplementedError

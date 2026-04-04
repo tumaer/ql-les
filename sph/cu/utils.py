@@ -86,5 +86,5 @@ def plt_evolution(ts, val, label: str, ref=None, fig_dir: Path = Path("fig"), ys
     if yscale:
         ax.set_yscale("log")
     ax.grid()
-    fig.savefig(fig_dir / f"tgv_{label}.png")
+    fig.savefig(fig_dir / f"evo_{label}.png")
     plt.close(fig)

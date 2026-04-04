@@ -167,6 +167,11 @@ __global__ void init_tgv_kernel(Vec3* pos, Vec3* vel, int nx, Real L, Real dx) {
     }
 }
 
+__global__ void copy_vec3_kernel(const Vec3* src, Vec3* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = src[i];
+}
+
 template <int DIM>
 __global__ void compute_particle_cells_kernel(
     const Vec3* pos, int* particle_cell, int* cell_counts,
@@ -222,14 +227,14 @@ __global__ void density_kernel(
 
 template <int DIM>
 __global__ void accel_kernel(
-    const Vec3* pos, const Vec3* vel,
+    const Vec3* pos, const Vec3* vel_u, const Vec3* vel_v,
     const Real* rho, const Real* press,
     const int* cell_offsets, const int* cell_particles,
     Vec3* acc, Vec3* acc_tvf, SphParams<DIM> p) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= p.n) return;
 
-    Vec3 ri = pos[i], ui = vel[i];
+    Vec3 ri = pos[i], ui = vel_u[i], vi = vel_v[i];
     Real rhoi = rho[i], pi = press[i];
     int  cx = max(0, min(p.cells_per_dim - 1, (int)floor(ri.x / p.cell_size)));
     int  cy = max(0, min(p.cells_per_dim - 1, (int)floor(ri.y / p.cell_size)));
@@ -248,7 +253,7 @@ __global__ void accel_kernel(
                 int c    = cell_index<DIM>(nx_c, ny, nz, p.cells_per_dim);
                 for (int k = cell_offsets[c]; k < cell_offsets[c + 1]; ++k) {
                     int  j    = cell_particles[k];
-                    Vec3 rj   = pos[j], uj = vel[j];
+                    Vec3 rj   = pos[j], uj = vel_u[j], vj = vel_v[j];
                     Real rhoj = rho[j], pj = press[j];
 
                     Vec3 rij = periodic_displacement(ri, rj, p.L);
@@ -267,6 +272,30 @@ __global__ void accel_kernel(
                     ai.y += coeff * rij.y;
                     ai.z += coeff * rij.z;
 
+                    if (p.is_tvf) {
+                        Vec3 vi_minus_ui = make_double3(vi.x - ui.x, vi.y - ui.y, vi.z - ui.z);
+                        Vec3 vj_minus_uj = make_double3(vj.x - uj.x, vj.y - uj.y, vj.z - uj.z);
+
+                        Real A_xx_term = 0.5 * (rhoi * ui.x * vi_minus_ui.x + rhoj * uj.x * vj_minus_uj.x);
+                        Real A_xy_term = 0.5 * (rhoi * ui.x * vi_minus_ui.y + rhoj * uj.x * vj_minus_uj.y);
+                        Real A_xz_term = 0.5 * (rhoi * ui.x * vi_minus_ui.z + rhoj * uj.x * vj_minus_uj.z);
+                        Real A_yx_term = 0.5 * (rhoi * ui.y * vi_minus_ui.x + rhoj * uj.y * vj_minus_uj.x);
+                        Real A_yy_term = 0.5 * (rhoi * ui.y * vi_minus_ui.y + rhoj * uj.y * vj_minus_uj.y);
+                        Real A_yz_term = 0.5 * (rhoi * ui.y * vi_minus_ui.z + rhoj * uj.y * vj_minus_uj.z);
+                        Real A_zx_term = 0.5 * (rhoi * ui.z * vi_minus_ui.x + rhoj * uj.z * vj_minus_uj.x);
+                        Real A_zy_term = 0.5 * (rhoi * ui.z * vi_minus_ui.y + rhoj * uj.z * vj_minus_uj.y);
+                        Real A_zz_term = 0.5 * (rhoi * ui.z * vi_minus_ui.z + rhoj * uj.z * vj_minus_uj.z);
+
+                        Real A_vec_x = A_xx_term * rij.x + A_xy_term * rij.y + A_xz_term * rij.z;
+                        Real A_vec_y = A_yx_term * rij.x + A_yy_term * rij.y + A_yz_term * rij.z;
+                        Real A_vec_z = A_zx_term * rij.x + A_zy_term * rij.y + A_zz_term * rij.z;
+
+                        Real A_coeff = prefactor * kd * inv_d;
+                        ai.x += A_coeff * A_vec_x;
+                        ai.y += A_coeff * A_vec_y;
+                        ai.z += A_coeff * A_vec_z;
+                    }
+
                     if (p.nu != 0.0) {
                         Real visc = p.nu * prefactor * kd * inv_d;
                         ai.x += visc * (ui.x - uj.x);
@@ -275,7 +304,7 @@ __global__ void accel_kernel(
                     }
 
                     if (p.is_tvf) {
-                        Real tc = prefactor * kd * inv_d * (-p.p_eos) * p.tvf_factor;
+                        Real tc = prefactor * kd * inv_d * (-p.p_eos);
                         atvfi.x += tc * rij.x;
                         atvfi.y += tc * rij.y;
                         atvfi.z += tc * rij.z;
@@ -290,23 +319,30 @@ __global__ void accel_kernel(
 
 template <int DIM>
 __global__ void integrate_kernel(
-    Vec3* pos, Vec3* vel, const Vec3* acc, const Vec3* acc_tvf,
-    int n, Real dt, Real L) {
+    Vec3* pos, Vec3* vel_u, Vec3* vel_v, const Vec3* acc, const Vec3* acc_tvf,
+    int n, Real dt, Real L, Real tvf_factor) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
 
-    Vec3 u = vel[i];
+    Vec3 u = vel_u[i];
     u.x += dt * acc[i].x;
     u.y += dt * acc[i].y;
     u.z += dt * acc[i].z;
-    vel[i] = u;
+    vel_u[i] = u;
 
-    // Position uses velocity-Verlet-style TVF advection: x += dt*(u + 0.5*dt*a_tvf)
+    Vec3 v = u;
+    if (tvf_factor != 0.0) {
+        v.x += tvf_factor * 0.5 * dt * acc_tvf[i].x;
+        v.y += tvf_factor * 0.5 * dt * acc_tvf[i].y;
+        v.z += tvf_factor * 0.5 * dt * acc_tvf[i].z;
+    }
+    vel_v[i] = v;
+
     Vec3 x = pos[i];
-    x.x = wrap_periodic(x.x + dt * (u.x + 0.5*dt*acc_tvf[i].x), L);
-    x.y = wrap_periodic(x.y + dt * (u.y + 0.5*dt*acc_tvf[i].y), L);
+    x.x = wrap_periodic(x.x + dt * v.x, L);
+    x.y = wrap_periodic(x.y + dt * v.y, L);
     if constexpr (DIM == 3)
-        x.z = wrap_periodic(x.z + dt * (u.z + 0.5*dt*acc_tvf[i].z), L);
+        x.z = wrap_periodic(x.z + dt * v.z, L);
     pos[i] = x;
 }
 
@@ -450,12 +486,13 @@ public:
             pressure_kernel<<<grid_n, 256>>>(d_p_, d_rho_, n_, p_eos_, rho_ref_);
 
             accel_kernel<DIM><<<grid_n, 256>>>(
-                d_pos_, d_vel_, d_rho_, d_p_,
+                d_pos_, d_vel_u_, d_vel_v_, d_rho_, d_p_,
                 d_cell_offsets_, d_cell_particles_,
                 d_acc_, d_acc_tvf_, sp_);
 
             integrate_kernel<DIM><<<grid_n, 256>>>(
-                d_pos_, d_vel_, d_acc_, d_acc_tvf_, n_, params_.dt, params_.L);
+                d_pos_, d_vel_u_, d_vel_v_, d_acc_, d_acc_tvf_,
+                n_, params_.dt, params_.L, params_.tvf_factor);
 
             if (step % params_.print_every == 0 || step == steps) {
                 CUDA_CHECK(cudaDeviceSynchronize());
@@ -465,12 +502,12 @@ public:
                     thrust::device_ptr<Real>(d_rho_) + n_,
                     0.0, thrust::maximum<Real>());
                 Real umax = thrust::transform_reduce(
-                    thrust::device_pointer_cast(d_vel_),
-                    thrust::device_pointer_cast(d_vel_) + n_,
+                    thrust::device_pointer_cast(d_vel_v_),
+                    thrust::device_pointer_cast(d_vel_v_) + n_,
                     SpeedNorm(), 0.0, thrust::maximum<Real>());
                 Real u2_mean = thrust::transform_reduce(
-                    thrust::device_pointer_cast(d_vel_),
-                    thrust::device_pointer_cast(d_vel_) + n_,
+                    thrust::device_pointer_cast(d_vel_v_),
+                    thrust::device_pointer_cast(d_vel_v_) + n_,
                     SpeedSqDim<DIM>(), 0.0, thrust::plus<Real>()) / static_cast<Real>(n_);
                 Real kinetic_energy = 0.5 * u2_mean * ipow_real(params_.L);
 
@@ -510,7 +547,8 @@ private:
 
     void allocate() {
         CUDA_CHECK(cudaMalloc(&d_pos_,            sizeof(Vec3) * n_));
-        CUDA_CHECK(cudaMalloc(&d_vel_,            sizeof(Vec3) * n_));
+        CUDA_CHECK(cudaMalloc(&d_vel_u_,          sizeof(Vec3) * n_));
+        CUDA_CHECK(cudaMalloc(&d_vel_v_,          sizeof(Vec3) * n_));
         CUDA_CHECK(cudaMalloc(&d_acc_,            sizeof(Vec3) * n_));
         CUDA_CHECK(cudaMalloc(&d_acc_tvf_,        sizeof(Vec3) * n_));
         CUDA_CHECK(cudaMalloc(&d_rho_,            sizeof(Real) * n_));
@@ -525,7 +563,8 @@ private:
     void init() {
         if (params_.init_state_file.empty()) {
             init_tgv_kernel<DIM><<<(n_ + 255) / 256, 256>>>(
-                d_pos_, d_vel_, params_.nx, params_.L, dx_);
+                d_pos_, d_vel_u_, params_.nx, params_.L, dx_);
+            copy_vec3_kernel<<<(n_ + 255) / 256, 256>>>(d_vel_u_, d_vel_v_, n_);
             CUDA_CHECK(cudaDeviceSynchronize());
             if (params_.noise_std_factor > 0.0) {
                 const Real noise_std = params_.noise_std_factor * dx_;
@@ -567,14 +606,15 @@ private:
         if (!in) throw std::runtime_error("Failed to read x/u from init_state_file");
 
         CUDA_CHECK(cudaMemcpy(d_pos_, h_pos.data(), sizeof(Vec3) * n_, cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_vel_, h_vel.data(), sizeof(Vec3) * n_, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_vel_u_, h_vel.data(), sizeof(Vec3) * n_, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_vel_v_, h_vel.data(), sizeof(Vec3) * n_, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaDeviceSynchronize());
         std::cout << "Initialized from state file: " << params_.init_state_file
                   << " (t=" << t_init << ")\n";
     }
 
     void release() {
-        cudaFree(d_pos_);  cudaFree(d_vel_);  cudaFree(d_acc_);  cudaFree(d_acc_tvf_);
+        cudaFree(d_pos_);  cudaFree(d_vel_u_);  cudaFree(d_vel_v_);  cudaFree(d_acc_);  cudaFree(d_acc_tvf_);
         cudaFree(d_rho_);  cudaFree(d_p_);
         cudaFree(d_particle_cell_);  cudaFree(d_cell_particles_);
         cudaFree(d_cell_counts_);    cudaFree(d_cell_write_);  cudaFree(d_cell_offsets_);
@@ -593,7 +633,7 @@ private:
     void save_state(int step, Real t) {
         std::vector<Vec3> h_pos(n_), h_vel(n_);
         CUDA_CHECK(cudaMemcpy(h_pos.data(), d_pos_, sizeof(Vec3) * n_, cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(h_vel.data(), d_vel_, sizeof(Vec3) * n_, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(h_vel.data(), d_vel_u_, sizeof(Vec3) * n_, cudaMemcpyDeviceToHost));
 
         std::ostringstream oss;
         oss << params_.save_dir << "/state_step_"
@@ -618,7 +658,8 @@ private:
     SphParams<DIM>      sp_;
 
     Vec3* d_pos_            = nullptr;
-    Vec3* d_vel_            = nullptr;
+    Vec3* d_vel_u_          = nullptr;
+    Vec3* d_vel_v_          = nullptr;
     Vec3* d_acc_            = nullptr;
     Vec3* d_acc_tvf_        = nullptr;
     Real* d_rho_            = nullptr;

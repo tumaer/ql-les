@@ -25,11 +25,11 @@ nvcc -O3 -std=c++17 solver.cu -o build/solver
 
 # Step 1: relaxation pass
 ./build/solver --config cfg/tgv3d_64_init.conf
-python init_u_tgv.py --type tgv3d --src "res/tgv3d_64_init/state_step_00002500.bin"
+python init_u_tgv.py --case tgv3d --src "res/tgv3d_64_init/state_step_00002000.bin"
 
 # # Step 2: production runs
 ./build/solver --config cfg/tgv3d_64_tvf.conf
 
 # # Step 3: analysis
-python analyse.py --type tgv3d --path res/tgv3d_64_init
-python analyse.py --type tgv3d --path res/tgv3d_64_tvf
+python analyse.py --case tgv3d --path res/tgv3d_64_init
+python analyse.py --case tgv3d --path res/tgv3d_64_tvf

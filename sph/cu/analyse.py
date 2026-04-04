@@ -25,30 +25,35 @@ def plt_field_2d(state: dict, fig_dir: Path = Path("fig"), vref=1) -> None:
     plt.close(fig)
 
 
-def plt_epsilon_tgv3d(states, fig_dir):
+def plt_epsilon_tgv3d(df_diag: pd.DataFrame, fig_dir):
     """Plot kinetic energy dissipation rate.
     Compare SPH against reference from ref_tgv3d_Re100.csv [time, epsilon] every dt=0.1
     """
     df_ref = pd.read_csv("ref_tgv3d_Re100.csv")
 
-    dt_sim = states[1]["t"] - states[0]["t"]
-
-    def ekin_fn(u):
-        return 0.5 * (u**2).sum(-1).mean()
-
-    ekin = np.array([ekin_fn(state["u"]) for state in states])
-    epsilon = -(ekin[1:] - ekin[:-1]) / dt_sim
-    t = np.array([state["t"] for state in states[1:]])
+    stride = max(len(df_diag) // 50, 1)
+    df_sample = df_diag.iloc[::stride]
+    t = df_sample["time"].to_numpy()
+    ekin = df_sample["ekin"].to_numpy()
+    dt = np.diff(t)
+    epsilon = -np.diff(ekin) / dt / (2 * np.pi) ** 3  # normalize by domain volume
+    t_mid = t[:-1] + dt / 2
 
     label = "epsilon"
-    fig, ax = plt.subplots(layout="constrained")
-    ax.plot(t, epsilon, label="SPH")
-    ax.plot(df_ref["time"].values, df_ref["epsilon"].values, "k--", label="ref")
+    # increase default font size
+    plt.rcParams.update({"font.size": 14})
+    fig, ax = plt.subplots(figsize=(4.5, 3.5), layout="constrained")
+    ax.plot(t_mid, epsilon, "ok", fillstyle="none", label="SPH", markersize=8, lw=0.1)
+    # ax.plot(t, epsilon, ".k", label="SPH", markersize=2)
+    ax.plot(df_ref["time"].values, df_ref["epsilon"].values, "k", lw=2, label="DNS")
     ax.set_xlabel("Time")
-    ax.set_ylabel(label)
-    ax.set_yscale("log")
-    ax.grid()
-    fig.savefig(fig_dir / f"tgv_{label}.png")
+    ax.set_ylabel(r"Dissipation rate $\epsilon$")
+    ax.legend()
+    # ax.set_ylim(0.004, 0.015)
+    ax.set_xlim(-0.2, 10.2)
+    ax.set_yticks([0.005, 0.010, 0.015])
+    fig.savefig(fig_dir / f"tgv3d_{label}.png", dpi=300)
+    fig.savefig(fig_dir / f"tgv3d_{label}.pdf", dpi=300)
     plt.close(fig)
 
 
@@ -78,15 +83,15 @@ if __name__ == "__main__":
         if len(states) > 0:
             plt_field_2d(states[0], fig_dir, vref=vref)
         if len(states) > 2:
-            plt_field_2d(states[2], fig_dir, vref=vref)
+            plt_field_2d(states[1], fig_dir, vref=vref)
         if len(states) > 3:
-            plt_field_2d(states[-1], fig_dir, vref=vref)
+            plt_field_2d(states[2], fig_dir, vref=vref)
 
     elif args.case == "tgv3d" or args.case == "hit3d":
         plt_evolution(t, df["umax"].values, "umax", None, fig_dir)
         plt_evolution(t, df["ekin"].values, "ekin", None, fig_dir, "log")
         plt_evolution(t, df["rho_max"].values, "rho_max", None, fig_dir)
         if args.case == "tgv3d":
-            plt_epsilon_tgv3d(states, fig_dir)
+            plt_epsilon_tgv3d(df, fig_dir)
     else:
         raise NotImplementedError
