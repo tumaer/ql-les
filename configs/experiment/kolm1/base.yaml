@@ -6,4 +6,4 @@ defaults:
   - override /callbacks: default
   - override /logger: wandb
 
-seed: 12345
+seed: 123

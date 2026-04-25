@@ -15,4 +15,4 @@ logger:
   wandb:
     project: "kolm10"
 
-seed: 12345
+seed: 123

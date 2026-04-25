@@ -24,4 +24,4 @@ logger:
   wandb:
     project: "hit10"
 
-seed: 12345
+seed: 123
