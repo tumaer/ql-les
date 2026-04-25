@@ -60,11 +60,11 @@ def _latest_file(traj: Path, pattern: str, key: Callable[[Path], int]) -> Path |
 
 
 def compute_spectrum_from_particles(
-    r: np.ndarray, u: np.ndarray, nx: int, dim: int
+    r: np.ndarray, u: np.ndarray, nx: int, dim: int, box_size: float = BOX_SIZE
 ) -> pd.DataFrame:
     """Get spectrum after converting particles to given grid."""
     start = time.time()
-    u_grid = interpolate_velocity_to_grid_mls2(r=r, u=u, nx=nx, dim=dim)
+    u_grid = interpolate_velocity_to_grid_mls2(r=r, u=u, nx=nx, dim=dim, box_size=box_size)
     print("P2G interpolation t=", time.time() - start)
     k_full, spectrum = spectrum_from_grid(u_grid)
     if not (nx & (nx - 1) == 0):  # If nx is not a power of two divide by 1.5

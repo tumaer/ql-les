@@ -29,7 +29,12 @@ python init_u_tgv.py --case tgv3d --src "res/tgv3d_64_init/state_step_00002000.b
 
 # # Step 2: production runs
 ./build/solver --config cfg/tgv3d_64_tvf.conf
+./build/solver --config cfg/tgv3d_64_tvf.conf --is_tvf_stress 1 --save_dir res/withA/tgv3d_64_tvf
 
 # # Step 3: analysis
 python analyse.py --case tgv3d --path res/tgv3d_64_init
 python analyse.py --case tgv3d --path res/tgv3d_64_tvf
+python analyse.py --case tgv3d --path res/withA/tgv3d_64_tvf
+
+# Step 4: validation
+python validate_tgv3d.py

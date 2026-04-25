@@ -39,21 +39,21 @@ def plt_epsilon_tgv3d(df_diag: pd.DataFrame, fig_dir):
     epsilon = -np.diff(ekin) / dt / (2 * np.pi) ** 3  # normalize by domain volume
     t_mid = t[:-1] + dt / 2
 
-    label = "epsilon"
     # increase default font size
-    plt.rcParams.update({"font.size": 14})
+    plt.rcParams.update({"font.size": 12})
     fig, ax = plt.subplots(figsize=(4.5, 3.5), layout="constrained")
     ax.plot(t_mid, epsilon, "ok", fillstyle="none", label="SPH", markersize=8, lw=0.1)
     # ax.plot(t, epsilon, ".k", label="SPH", markersize=2)
     ax.plot(df_ref["time"].values, df_ref["epsilon"].values, "k", lw=2, label="DNS")
+
     ax.set_xlabel("Time")
     ax.set_ylabel(r"Dissipation rate $\epsilon$")
-    ax.legend()
-    # ax.set_ylim(0.004, 0.015)
+    ax.legend(frameon=False)
+    ax.set_ylim(0.004, 0.015)
     ax.set_xlim(-0.2, 10.2)
     ax.set_yticks([0.005, 0.010, 0.015])
-    fig.savefig(fig_dir / f"tgv3d_{label}.png", dpi=300)
-    fig.savefig(fig_dir / f"tgv3d_{label}.pdf", dpi=300)
+    fig.savefig(fig_dir / "tgv3d_epsilon.png", dpi=300)
+    fig.savefig(fig_dir / "tgv3d_epsilon.pdf", dpi=300)
     plt.close(fig)
 
 
@@ -86,10 +86,13 @@ if __name__ == "__main__":
             plt_field_2d(states[1], fig_dir, vref=vref)
         if len(states) > 3:
             plt_field_2d(states[2], fig_dir, vref=vref)
+        if len(states) > 4:
+            plt_field_2d(states[-1], fig_dir, vref=vref)
 
     elif args.case == "tgv3d" or args.case == "hit3d":
         plt_evolution(t, df["umax"].values, "umax", None, fig_dir)
-        plt_evolution(t, df["ekin"].values, "ekin", None, fig_dir, "log")
+        plt_evolution(t, df["ekinu"].values, "ekinu", None, fig_dir, "log")
+        plt_evolution(t, df["ekinv"].values, "ekinv", None, fig_dir, "log")
         plt_evolution(t, df["rho_max"].values, "rho_max", None, fig_dir)
         if args.case == "tgv3d":
             plt_epsilon_tgv3d(df, fig_dir)

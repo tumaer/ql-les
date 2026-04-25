@@ -273,7 +273,7 @@ def tvf_stress_fn(rho: float, u, v):
     return jnp.outer(rho * u, v - u)
 
 
-def acceleration_standard_fn_wrapper(kernel_fn):
+def acceleration_standard_fn_wrapper(kernel_fn, is_tvf_stress=False):
     """Standard SPH acceleration according to Adami et al. 2012."""
 
     def acceleration_standard_fn(
@@ -303,9 +303,11 @@ def acceleration_standard_fn_wrapper(kernel_fn):
         _c = _weighted_volume * _kernel_grad / (d_ij + EPS)
 
         # (Eq. 8): \boldsymbol{e}_{ij} is computed as r_ij/d_ij here.
-        _A = (tvf_stress_fn(rho_i, u_i, v_i) + tvf_stress_fn(rho_j, u_j, v_j)) / 2
         _u_ij = u_i - u_j
-        a_eq_8 = _c * (-p_ij * r_ij + jnp.dot(_A, r_ij) + eta_ij * _u_ij)
+        a_eq_8 = _c * (-p_ij * r_ij + eta_ij * _u_ij)
+        if is_tvf_stress:
+            _A = (tvf_stress_fn(rho_i, u_i, v_i) + tvf_stress_fn(rho_j, u_j, v_j)) / 2
+            a_eq_8 += _c * jnp.dot(_A, r_ij)
         return a_eq_8
 
     return acceleration_standard_fn
@@ -322,6 +324,7 @@ class WCSPH:
         dim: int,
         dt: float,
         c_ref: float,
+        is_tvf_stress: bool,
     ):
         self.displacement_fn = displacement_fn
         self.dt = dt
@@ -330,7 +333,7 @@ class WCSPH:
 
         self._kernel_fn = QuinticKernel(h=dx, dim=dim)
         self._acceleration_tvf_fn = acceleration_tvf_fn_wrapper(self._kernel_fn)
-        self._acceleration_fn = acceleration_standard_fn_wrapper(self._kernel_fn)
+        self._acceleration_fn = acceleration_standard_fn_wrapper(self._kernel_fn, is_tvf_stress)
 
     def forward_wrapper(self):
         """Wrapper of update step of SPH."""
@@ -457,6 +460,7 @@ def simulate(cfg):
         cfg.case.dim,
         cfg.solver.dt,
         cfg.case.c_ref,
+        cfg.solver.is_tvf_stress,
     )
     forward = solver.forward_wrapper()
 
@@ -657,6 +661,7 @@ cfg_tgv = OmegaConf.create(
             "dt": 0.0005,
             "t_end": 6,
             "sequence_length": 12000,
+            "is_tvf_stress": False,
         },
         "eos": {
             "name": "Tait",

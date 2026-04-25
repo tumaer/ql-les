@@ -63,6 +63,13 @@ inline std::string trim(const std::string& s) {
     return s.substr(begin, s.find_last_not_of(" \t\r\n") - begin + 1);
 }
 
+inline bool parse_bool(const std::string& s) {
+    std::string t = trim(s);
+    if (t == "1") return true;
+    if (t == "0") return false;
+    throw std::runtime_error("Invalid boolean value (expected 0 or 1): " + s);
+}
+
 __device__ inline Real wrap_periodic(Real x, Real L) {
     return x - floor(x / L) * L;
 }
@@ -107,7 +114,7 @@ template <int DIM>
 struct SphParams {
     int n, cells_per_dim;
     Real L, mass, nu, p_eos, tvf_factor, cell_size;
-    bool is_tvf;
+    bool is_tvf, is_tvf_stress;
     QuinticKernel<DIM> kernel;
 };
 
@@ -272,7 +279,7 @@ __global__ void accel_kernel(
                     ai.y += coeff * rij.y;
                     ai.z += coeff * rij.z;
 
-                    if (p.is_tvf) {
+                    if (p.is_tvf_stress) {
                         Vec3 vi_minus_ui = make_double3(vi.x - ui.x, vi.y - ui.y, vi.z - ui.z);
                         Vec3 vj_minus_uj = make_double3(vj.x - uj.x, vj.y - uj.y, vj.z - uj.z);
 
@@ -376,6 +383,7 @@ public:
         int  print_every = 200;
         int  save_every  = 0;
         Real noise_std_factor = 0.0;
+        bool is_tvf_stress = false;
         std::string save_dir        = "res/out";
         std::string init_state_file = "";
     };
@@ -414,6 +422,7 @@ public:
             else if (key == "print_every")     p.print_every = std::stoi(val);
             else if (key == "save_every")      p.save_every  = std::stoi(val);
             else if (key == "noise_std_factor") p.noise_std_factor = std::stod(val);
+            else if (key == "is_tvf_stress")   p.is_tvf_stress = parse_bool(val);
             else if (key == "save_dir")        p.save_dir    = val;
             else if (key == "init_state_file") p.init_state_file = val;
             else throw std::runtime_error("Unknown config key: " + key);
@@ -435,7 +444,7 @@ public:
               ipow_real(dx_) * rho_ref_,
               p.nu, p_eos_, p.tvf_factor,
               p.L / cells_per_dim_,
-              std::abs(p.tvf_factor) > 0.0,
+              std::abs(p.tvf_factor) > 0.0, p.is_tvf_stress,
               kernel_} {
         if (params_.print_every <= 0) params_.print_every = 1;
         if (params_.save_every  <  0) params_.save_every  = 0;
@@ -502,30 +511,47 @@ public:
                     thrust::device_ptr<Real>(d_rho_) + n_,
                     0.0, thrust::maximum<Real>());
                 Real umax = thrust::transform_reduce(
+                    thrust::device_pointer_cast(d_vel_u_),
+                    thrust::device_pointer_cast(d_vel_u_) + n_,
+                    SpeedNorm(), 0.0, thrust::maximum<Real>());
+                Real vmax = thrust::transform_reduce(
                     thrust::device_pointer_cast(d_vel_v_),
                     thrust::device_pointer_cast(d_vel_v_) + n_,
                     SpeedNorm(), 0.0, thrust::maximum<Real>());
-                Real u2_mean = thrust::transform_reduce(
+                Real u2_mean_u = thrust::transform_reduce(
+                    thrust::device_pointer_cast(d_vel_u_),
+                    thrust::device_pointer_cast(d_vel_u_) + n_,
+                    SpeedSqDim<DIM>(), 0.0, thrust::plus<Real>()) / static_cast<Real>(n_);
+                Real u2_mean_v = thrust::transform_reduce(
                     thrust::device_pointer_cast(d_vel_v_),
                     thrust::device_pointer_cast(d_vel_v_) + n_,
                     SpeedSqDim<DIM>(), 0.0, thrust::plus<Real>()) / static_cast<Real>(n_);
-                Real kinetic_energy = 0.5 * u2_mean * ipow_real(params_.L);
+                Real kinetic_energy_u = 0.5 * u2_mean_u * ipow_real(params_.L);
+                Real kinetic_energy_v = 0.5 * u2_mean_v * ipow_real(params_.L);
 
-                std::cout << "step=" << step << " t=" << t << " umax=" << umax;
+                std::cout << "step=" << step << " t=" << t
+                          << " umax=" << umax << " vmax=" << vmax;
                 if constexpr (DIM == 2) {
                     Real uref = std::exp(-8.0 * kPi * kPi * params_.nu * t) * params_.u_ref;
                     std::cout << " uref=" << uref;
                 }
-                std::cout << " rho_max=" << rho_max << " ekin=" << kinetic_energy << "\n";
+                std::cout << " rho_max=" << rho_max
+                          << " ekin=" << kinetic_energy_u
+                          << " ekinv=" << kinetic_energy_v << "\n";
 
                 if (diag_csv_.is_open()) {
                     diag_csv_ << step << "," << std::setprecision(17) << t
-                              << "," << umax;
+                              << "," << umax
+                              << "," << vmax;
                     if constexpr (DIM == 2) {
                         Real uref = std::exp(-8.0 * kPi * kPi * params_.nu * t) * params_.u_ref;
                         diag_csv_ << "," << uref;
                     }
-                    diag_csv_ << "," << rho_max << "," << kinetic_energy << "\n";
+                    // Keep ekin as alias of ekinv for backward compatibility.
+                    diag_csv_ << "," << rho_max
+                              << "," << kinetic_energy_u
+                              << "," << kinetic_energy_v
+                              << "\n";
                     diag_csv_.flush();
                 }
             }
@@ -625,9 +651,9 @@ private:
         const std::string csv = params_.save_dir + "/diagnostics.csv";
         diag_csv_.open(csv, std::ios::out | std::ios::trunc);
         if (!diag_csv_) throw std::runtime_error("Failed to open diagnostics CSV: " + csv);
-        diag_csv_ << "step,time,umax";
+        diag_csv_ << "step,time,umax,vmax";
         if constexpr (DIM == 2) diag_csv_ << ",uref";
-        diag_csv_ << ",rho_max,ekin\n";
+        diag_csv_ << ",rho_max,ekin,ekinv\n";
     }
 
     void save_state(int step, Real t) {
@@ -688,6 +714,7 @@ struct CliOverrides {
     bool has_init_state_file = false;
     bool has_t_end = false;
     bool has_tvf_factor = false;
+    bool has_is_tvf_stress = false;
     bool has_print_every = false;
     bool has_save_every = false;
     bool has_noise_std_factor = false;
@@ -704,12 +731,15 @@ struct CliOverrides {
     minimal_sph::Real t_end = 0.0;
     minimal_sph::Real tvf_factor = 0.0;
     minimal_sph::Real noise_std_factor = 0.0;
+    bool is_tvf_stress = false;
 };
 
 void print_usage() {
     std::cerr << "Usage: ./solver [config_path] [--config path]"
               << " [--dim value] [--nx value] [--L value] [--u_ref value] [--nu value]"
               << " [--dt value] [--t_end value] [--tvf_factor value]"
+              << " [--is_tvf_stress [bool]]"
+              << " [--is_tvf_stress 0|1]"
               << " [--print_every value] [--save_every value]"
               << " [--noise_std_factor value] [--save_dir path]"
               << " [--init_state_file path]\n";
@@ -766,6 +796,9 @@ int main(int argc, char** argv) {
             } else if (arg == "--tvf_factor") {
                 overrides.tvf_factor = std::stod(require_arg_value(arg, argc, argv, i));
                 overrides.has_tvf_factor = true;
+            } else if (arg == "--is_tvf_stress") {
+                overrides.has_is_tvf_stress = true;
+                overrides.is_tvf_stress = minimal_sph::parse_bool(require_arg_value(arg, argc, argv, i));
             } else if (arg == "--print_every") {
                 overrides.print_every = std::stoi(require_arg_value(arg, argc, argv, i));
                 overrides.has_print_every = true;
@@ -812,6 +845,7 @@ int main(int argc, char** argv) {
             if (overrides.has_init_state_file) params.init_state_file = overrides.init_state_file;
             if (overrides.has_t_end) params.t_end = overrides.t_end;
             if (overrides.has_tvf_factor) params.tvf_factor = overrides.tvf_factor;
+            if (overrides.has_is_tvf_stress) params.is_tvf_stress = overrides.is_tvf_stress;
             if (overrides.has_print_every) params.print_every = overrides.print_every;
             if (overrides.has_save_every) params.save_every = overrides.save_every;
             if (overrides.has_noise_std_factor) params.noise_std_factor = overrides.noise_std_factor;
@@ -838,6 +872,8 @@ int main(int argc, char** argv) {
                   << "Usage: ./solver [config_path] [--config path]"
                   << " [--dim value] [--nx value] [--L value] [--u_ref value] [--nu value]"
                   << " [--dt value] [--t_end value] [--tvf_factor value]"
+                  << " [--is_tvf_stress [bool]]"
+                  << " [--is_tvf_stress 0|1]"
                   << " [--print_every value] [--save_every value]"
                   << " [--noise_std_factor value] [--save_dir path]"
                   << " [--init_state_file path]\n";

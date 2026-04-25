@@ -68,8 +68,7 @@ if __name__ == "__main__":
     src_pos = args.src_pos
 
     state = load_state(src_pos)  # positions
-    dim = state["x"].shape[1]
-    Nx = round(len(state["x"]) ** (1 / dim))  # number of particles along x
+    Nx = int(state["nx"])  # number of particles along x from state header
 
     # Load velocity field from npy
     # cp /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1/traj_19/u_512_04500_burnin.npy traj_19
@@ -78,8 +77,10 @@ if __name__ == "__main__":
         f"Expected 5 trajectories in {args.src_u}, found {len(trajs)}"
     )
     if "hit3d" in str(args.src_u):
+        dim = 3
         burn_in = "u_256_05000_burnin.npy"
     elif "kolm2d" in str(args.src_u):
+        dim = 2
         burn_in = "u_512_04500_burnin.npy"
     else:
         raise ValueError(f"Unknown src_u path {args.src_u}, expected 'hit3d' or 'kolm2d' in path")

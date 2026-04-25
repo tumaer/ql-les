@@ -25,6 +25,7 @@ for resolution in 64 128 256 512; do
 
     # Step 3: trajectory runs
     for traj in 15 16 17 18 19; do
+        # to include correction matrix A, add: --is_tvf_stress 1
         ./build/solver --config cfg/kolm2d_${resolution}.conf \
           --save_dir res/kolm2d_${resolution}/traj_${traj} \
           --init_state_file res/kolm2d_${resolution}/traj_${traj}/relaxed_state.bin
@@ -39,4 +40,7 @@ for resolution in 64 128 256 512; do
 done
 
 python analyse_kolm_hit_2.py --case kolm2d --path res --burnin-steps-dns 45 \
+  --ref-path /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1
+
+python analyse_kolm_hit_3.py --case kolm2d --path res --burnin-steps-dns 45 \
   --ref-path /local/disk/atoshev/dataset_kolm/raw/2D_KOLM_4096_140kevery1

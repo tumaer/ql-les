@@ -1,3 +1,5 @@
+"""Compare Ekin and spectra across resolutions for Kolm2d/HIT3d, with JSON output."""
+
 from __future__ import annotations
 
 import argparse
@@ -141,6 +143,8 @@ def plot_ekin_and_spectra(
     ref_path: Path,
     burnin_steps_dns: int,
     ref_traj_ids=REF_TRAJ_IDS,
+    is_corr=False,
+    is_fill=False,
 ) -> None:
     """Plot velocity correlation, Ekin, and spectra across resolutions, comparing to DNS reference."""
     case = CASE_CONFIGS[case_name]
@@ -153,8 +157,12 @@ def plot_ekin_and_spectra(
     }
 
     plt.rcParams.update({"font.size": 13})
-    fig, axs = plt.subplots(1, 3, figsize=(12, 4), layout="constrained")
-    ax_corr, ax_ekin, ax_spectrum = axs
+    if is_corr:
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4), layout="constrained")
+        ax_corr, ax_ekin, ax_spectrum = axs
+    else:
+        fig, axs = plt.subplots(1, 2, figsize=(8, 4), layout="constrained")
+        ax_ekin, ax_spectrum = axs
 
     # Reference velocity correlation (raw for JSON; stats for plotting)
     ref_trajs = [ref_path / f"traj_{idx}" for idx in ref_traj_ids]
@@ -166,7 +174,8 @@ def plot_ekin_and_spectra(
     ekin_ref = stats(ekin_ref_values)
     plot_data["ekin"]["ref"] = {"x": t_ref, "values": ekin_ref_values}
     ax_ekin.plot(t_ref, ekin_ref["med"], "k", label="DNS")
-    ax_ekin.fill_between(t_ref, ekin_ref["min"], ekin_ref["max"], color="k", alpha=0.2)
+    if is_fill:
+        ax_ekin.fill_between(t_ref, ekin_ref["min"], ekin_ref["max"], color="k", alpha=0.2)
 
     # Reference spectrum (raw for JSON; stats for plotting)
     ref_spectrum_files = _list_cached_metric(ref_trajs, SPECTRUM_CSV_NAME)
@@ -174,27 +183,31 @@ def plot_ekin_and_spectra(
     ref_stats = stats(ref_values)
     plot_data["spectrum"]["ref"] = {"x": k_ref, "values": ref_values}
     ax_spectrum.plot(k_ref, ref_stats["med"], "k", label="DNS")
-    ax_spectrum.fill_between(k_ref, ref_stats["min"], ref_stats["max"], color="k", alpha=0.2)
+    if is_fill:
+        ax_spectrum.fill_between(k_ref, ref_stats["min"], ref_stats["max"], color="k", alpha=0.2)
 
     for nx, save_dir in run_dirs:
         trajs = sorted(save_dir.glob("traj_*"))
 
-        # Plot velocity correlation (raw for JSON; stats for plotting)
-        corr_files = _list_cached_metric(trajs, CORR_CSV_NAME)
-        t_corr, corr_values = _load_raw_metric(corr_files, x_col="time", y_col="corr")
-        # Shift so that t=0 value is 1 on average. Diff due to particle interpolation
-        # corr_values = corr_values + 1 - corr_values[:, 0].mean()
-        corr_stats = stats(corr_values)
-        plot_data["corr"]["pred"][nx] = {"x": t_corr, "values": corr_values}
-        ax_corr.plot(t_corr, corr_stats["med"], label=rf"SPH, {nx}$^{case.dim}$")
-        ax_corr.fill_between(t_corr, corr_stats["min"], corr_stats["max"], alpha=0.2)
+        if is_corr:
+            # Plot velocity correlation (raw for JSON; stats for plotting)
+            corr_files = _list_cached_metric(trajs, CORR_CSV_NAME)
+            t_corr, corr_values = _load_raw_metric(corr_files, x_col="time", y_col="corr")
+            # Shift so that t=0 value is 1 on average. Diff due to particle interpolation
+            # corr_values = corr_values + 1 - corr_values[:, 0].mean()
+            corr_stats = stats(corr_values)
+            plot_data["corr"]["pred"][nx] = {"x": t_corr, "values": corr_values}
+            ax_corr.plot(t_corr, corr_stats["med"], label=rf"SPH, {nx}$^{case.dim}$")
+            if is_fill:
+                ax_corr.fill_between(t_corr, corr_stats["min"], corr_stats["max"], alpha=0.2)
 
         # Plot Ekin
         ekin_values, time = _load_ekin_values(trajs)
         ekin_stats = stats(ekin_values)
         plot_data["ekin"]["pred"][nx] = {"x": time, "values": ekin_values}
         ax_ekin.plot(time, ekin_stats["med"], label=rf"SPH, {nx}$^{case.dim}$")
-        ax_ekin.fill_between(time, ekin_stats["min"], ekin_stats["max"], alpha=0.2)
+        if is_fill:
+            ax_ekin.fill_between(time, ekin_stats["min"], ekin_stats["max"], alpha=0.2)
 
         # Plot spectrum (raw for JSON; stats for plotting)
         spectrum_files = _list_cached_metric(trajs, SPECTRUM_CSV_NAME)
@@ -204,17 +217,19 @@ def plot_ekin_and_spectra(
         ax_spectrum.plot(
             k_ref, spectra_stats["med"][: len(k_ref)], label=rf"SPH, {nx}$^{case.dim}$"
         )
-        ax_spectrum.fill_between(
-            k_ref,
-            spectra_stats["min"][: len(k_ref)],
-            spectra_stats["max"][: len(k_ref)],
-            alpha=0.2,
-        )
+        if is_fill:
+            ax_spectrum.fill_between(
+                k_ref,
+                spectra_stats["min"][: len(k_ref)],
+                spectra_stats["max"][: len(k_ref)],
+                alpha=0.2,
+            )
 
-    ax_corr.set_xlabel("Time")
-    ax_corr.set_ylabel("Velocity correlation")
-    ax_corr.set_xlim(time[0], time[-1])
-    ax_corr.set_ylim(-0.02, 1.02)
+    if is_corr:
+        ax_corr.set_xlabel("Time")
+        ax_corr.set_ylabel("Velocity correlation")
+        ax_corr.set_xlim(time[0], time[-1])
+        ax_corr.set_ylim(-0.02, 1.02)
 
     ax_ekin.set_xlabel("Time")
     ax_ekin.set_ylabel("Kinetic energy")
@@ -232,6 +247,8 @@ def plot_ekin_and_spectra(
     for ax in axs:
         ax.grid()
 
+    if case_name == "kolm2d":
+        ax_ekin.set_ylim(27, 57)
     fig.savefig(data_root / f"{case_name}_comparison.png", dpi=200)
     plt.close(fig)
 

@@ -40,3 +40,6 @@ done
 
 python analyse_kolm_hit_2.py --case hit3d --path res --burnin-steps-dns 250 \
   --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_25kevery1
+
+python analyse_kolm_hit_3.py --case hit3d --path res --burnin-steps-dns 250 \
+  --ref-path /local/disk/atoshev/dataset_hit/raw/3D_HIT_32768_25kevery1

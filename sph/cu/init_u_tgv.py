@@ -16,11 +16,11 @@ import numpy as np
 from utils import load_state, write_state
 
 
-def tgv2d_u(x: np.ndarray) -> np.ndarray:
+def tgv2d_u(x: np.ndarray, k: int = 2) -> np.ndarray:
     """Return analytic 2-D TGV velocity at positions *x* (L=1 domain)."""
     u = np.zeros_like(x)
-    u[:, 0] = -np.cos(2.0 * np.pi * x[:, 0]) * np.sin(2.0 * np.pi * x[:, 1])
-    u[:, 1] = +np.sin(2.0 * np.pi * x[:, 0]) * np.cos(2.0 * np.pi * x[:, 1])
+    u[:, 0] = -np.cos(k * np.pi * x[:, 0]) * np.sin(k * np.pi * x[:, 1])
+    u[:, 1] = +np.sin(k * np.pi * x[:, 0]) * np.cos(k * np.pi * x[:, 1])
     return u
 
 
