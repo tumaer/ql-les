@@ -1,6 +1,6 @@
 <div align="center">
 
-# Learning Quasi-Lagrangian Turbulence
+# ML Code for *Data-Driven Discretizations of Quasi-Lagrangian Turbulence*
 
 <a href="https://github.com/pre-commit/pre-commit"><img alt="Python" src="https://img.shields.io/badge/-Python_3.10-blue?logo=python&logoColor=white"></a> <a href="https://github.com/ashleve/lightning-hydra-template"><img alt="Template" src="https://img.shields.io/badge/-Lightning--Hydra--Template-017F2F?style=flat&logo=github&labelColor=gray"></a> ![license](https://img.shields.io/badge/License-MIT-green.svg?labelColor=gray)
 
@@ -8,11 +8,22 @@
 
 ## Description
 
-We learn quasi-Lagrangian fluid dynamics using the following parametrizations:
+This repository has the following structure:
 
-- "$\mathbf{u} \land \mathbf{v}$": Learn both physical velocity $\mathbf{u}$ and shifting velocity $\mathbf{v}$ simultaneously with one GNN.
-- "$\mathbf{u} \to \mathbf{v}$": Learn the field evolution $\mathbf{u}$ with a neural operator, and then simply advect particles.
-- "$\mathbf{v} \to \mathbf{u}$": Learn the dynamics $\mathbf{v}$ with a GNN, and then use a second GNN to approximate $\mathbf{u}$.
+- `./configs/` - **YAML configurations** for ML experiments.
+- `./data/` - ML datasets. To run the experiments from the paper, download the datasets from Zenodo and unzip them inside of this directory, e.g., `./data/2D_KOLM_4096_140kevery1/`.
+- `./logs/` - ML run output storage. E.g., W&B logs, checkpoints, rollout animations.
+- `./neuraloperator/` - Modified version of the [neuraloperator](https://github.com/neuraloperator/neuraloperator) library as git module with some custom modifications to enable periodic boundary condition in [GINO](https://arxiv.org/abs/2309.00583).
+- `./notebooks/` - Visualization of results. All plots of ML experimental results were generated with `./notebooks/vis_rlt.py`.
+- `./scripts/` - **Launching ML experiments**. The three bash files contain all commands for training and inference (kolm1/kolm10/hit10).
+- `./sph/` - **Baseline SPH runs** with CUDA implementation of TVF-SPH [(Adami et al., 2013)](https://www.sciencedirect.com/science/article/abs/pii/S002199911300096X). Provides following functionalities:
+  - Solver validation experiments can be launched with `cd sph/cu/ && bash validate_tgv2d.sh` and `cd sph/cu/ && bash validate_tgv3d.sh`.
+  - Generate the SPH baseline results with `cd sph/cu/ && bash validate_kolm2d.sh` and `cd sph/cu/ && bash validate_hit3d.sh`.
+- `./scr/` - **Core ML code** for learning quasi-Lagrangian fluid dynamics using the following parametrizations:
+  - $[\mathbf{u} \leftrightarrow \mathbf{v}]$: Learn both physical velocity $\mathbf{u}$ and shifting velocity $\mathbf{v}$ simultaneously with one GNN.
+  - $[\mathbf{u} \to \mathbf{v}]$: Learn the field evolution $\mathbf{u}$ with a neural operator, and then simply advect particles.
+  - $[\mathbf{v} \to \mathbf{u}]$: Learn the dynamics $\mathbf{v}$ with a GNN, and then use a second GNN to approximate $\mathbf{u}$.
+- `./validate_code/` - experiments on reproducing results from LagrangeBench. This was the beginning of the codebase, but it hasn't been kept up-to-date and is here only as a reference.
 
 ## Installation
 
@@ -20,9 +31,9 @@ We learn quasi-Lagrangian fluid dynamics using the following parametrizations:
 
 ```bash
 # clone project
-git clone --recurse-submodules https://github.com/arturtoshev/sph_les
+git clone --recurse-submodules $GITHUB_HTTPS
 # if you forgot `--recurse-submodule`, run `git submodule update --init`
-cd sph_les
+cd $REPOSITORY_NAME
 
 # create virtual environment
 python3.10 -m venv venv

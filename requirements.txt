@@ -36,6 +36,7 @@ python-dotenv
 pandas
 # sh            # for running bash commands in some tests (linux/macos only)
 finufft
+imageio
 
 # --------- LagrangeBench --------- #
 h5py
