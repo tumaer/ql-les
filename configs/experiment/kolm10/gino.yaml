@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+  - /experiment/kolm10/base
+  - override /model: gino
+
+model:
+  _target_: src.models.gino_module.GINOLitModule
+  net:
+    noise_std: 0.0 # TODO: ablate
+
+logger:
+  wandb:
+    project: "kolm10"
+
+tags: ["gino"]

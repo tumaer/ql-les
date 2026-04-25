@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - /experiment/kolm_every_10/base
+  - override /model: lles
+
+model:
+  _target_: src.models.gnn_module.GNNLitModule
+  net:
+    noise_std: 0.0
+    hidden_dims: [256, 512, 256]
+    activation: "relu" # tanh, relu, sigmoid
+  pushforward: null
+  vel_solver: "simple" # "simple", "tvf", "neural_sph"
+  alpha_u: 1.0
+  alpha_v: 1.0
+  # TODO: do we need to specify the node_features?
+
+logger:
+  wandb:
+    project: "kolm2d_every10"
+
+tags: ["kolm10", "lles"]

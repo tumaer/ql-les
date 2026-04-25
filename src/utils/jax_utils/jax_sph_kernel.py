@@ -39,6 +39,7 @@ class CubicKernel(BaseKernel):
             self._sigma = 1.0 / jnp.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         q = r * self._one_over_h
         c1 = jnp.where(1 - q >= 0, 1, 0)
         c2 = jnp.where(jnp.logical_and(2 - q < 1, 2 - q >= 0), 1, 0)
@@ -64,6 +65,7 @@ class QuinticKernel(BaseKernel):
             self._sigma = 3.0 / 359.0 / jnp.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         q = r * self._one_over_h
         q1 = jnp.maximum(0.0, 1.0 - q)
         q2 = jnp.maximum(0.0, 2.0 - q)
@@ -89,6 +91,7 @@ class WendlandC2Kernel(BaseKernel):
             self._sigma = 21.0 / 16.0 / jnp.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         if self.dim == 1:
             q = r * self._one_over_h
             q1 = jnp.maximum(0.0, 1.0 - 0.5 * q)
@@ -120,6 +123,7 @@ class WendlandC4Kernel(BaseKernel):
             self._sigma = 495.0 / 256.0 / jnp.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         if self.dim == 1:
             q = r * self._one_over_h
             q1 = jnp.maximum(0.0, 1.0 - 0.5 * q)
@@ -151,6 +155,7 @@ class WendlandC6Kernel(BaseKernel):
             self._sigma = 1365.0 / 512.0 / jnp.pi * self._one_over_h**3
 
     def w(self, r):
+        """Kernel weight."""
         if self.dim == 1:
             q = r * self._one_over_h
             q1 = jnp.maximum(0.0, 1.0 - 0.5 * q)
@@ -176,6 +181,7 @@ class GaussianKernel(BaseKernel):
         self._sigma = 1.0 / jnp.pi ** (dim / 2) * self._one_over_h ** (dim)
 
     def w(self, r):
+        """Kernel weight."""
         q = r * self._one_over_h
         q1 = jnp.where(3 - q >= 0, 1, 0)
 
@@ -195,7 +201,69 @@ class SuperGaussianKernel(BaseKernel):
         self._sigma = 1.0 / jnp.pi ** (dim / 2) * self._one_over_h ** (dim)
 
     def w(self, r):
+        """Kernel weight."""
         q = r * self._one_over_h
         q1 = jnp.where(3 - q >= 0, 1, 0)
 
         return self._sigma * q1 * jnp.exp(-(q**2)) * (self.dim / 2 + 1 - q**2)
+
+
+class M4PrimeKernel:
+    """The M'4 kernel"""
+
+    def __init__(self, h, dim=3):
+        self._one_over_h = 1.0 / h
+        self._normalized_cutoff = 2.0
+        self.cutoff = self._normalized_cutoff * h
+
+    def w(self, r):
+        """Evaluates the kernel at the radial displacement vector r."""
+        q = r * self._one_over_h
+        q1 = 1 - 2.5 * q**2 + 1.5 * q**3
+        q2 = 0.5 * (1 - q) * (2 - q) ** 2
+
+        res = jnp.where(q < 1, q1, 0)
+        res = jnp.where((q >= 1) * (q < 2), q2, res)
+        return jnp.prod(res)  # , axis=1
+
+
+class FourierQuinticKernel:
+    """The quintic kernel function of Morris in Fourier space."""
+
+    def __init__(self, h, dim=3):
+        self._one_over_h = 1.0 / h
+
+        self._normalized_cutoff = 3.0
+        self.cutoff = self._normalized_cutoff * h
+        if dim == 1:
+            self._sigma = 1.0 / 120.0 * self._one_over_h
+        elif dim == 2:
+            self._sigma = 7.0 / 478.0 / jnp.pi * self._one_over_h**2
+        elif dim == 3:
+            self._sigma = 3.0 / 359.0 / jnp.pi * self._one_over_h**3
+
+    def w(self, k):
+        """Kernel weight."""
+        pjk = jnp.pi * 1j * k
+        exp = jnp.exp(2 * pjk)
+        q1 = (
+            jnp.exp(-2 * pjk)
+            * (
+                3 * exp * (44 * pjk**5 - 20 * pjk**3 + 30 * pjk - 25)
+                - 2 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30)
+                + 75
+            )
+        ) / (4 * pjk**6)
+        q2 = (
+            jnp.exp(-4 * pjk)
+            * (
+                -2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15)
+                + exp * (4 * pjk * (pjk * (pjk * (pjk * (26 * pjk - 25) + 10) + 15) - 30) + 75)
+                - 75
+            )
+        ) / (8 * pjk**6)
+        q3 = (
+            jnp.exp(-6 * pjk)
+            * (exp * (2 * pjk * (pjk * (pjk * (pjk * (2 * pjk - 5) + 10) - 15) + 15) - 15) + 15)
+        ) / (8 * pjk**6)
+        return self._sigma * (q1 + q2 + q3)

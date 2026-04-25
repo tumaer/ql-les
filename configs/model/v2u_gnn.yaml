@@ -1,0 +1,44 @@
+# configs/model/gns.yaml
+
+# Specify the correct path to the SimulatorLitModule in the Lightning module
+_target_: src.models.v2u_module.V2ULitModule # Adjust this to the actual path for your GNS Lightning module
+
+net:
+  # Specify the correct path to the GNS model implementation (GNNSimulator) within the SimulatorLitModule
+  _target_: src.models.v2u_module.V2USimulator # Adjust this to the actual path for your GNS simulator model
+  _partial_: true
+  model_name: "gns"
+  latent_dim: 64
+  num_message_passing_steps: 5
+  noise_std: 0.0
+  metadata_path: ${data.data_dir}//${data.metadata_file}
+  isotropic_norm: false
+  mlp_num_layers: 1
+  mlp_hidden_dim: 64
+
+# Optimizer configuration
+optimizer:
+  _partial_: true
+  _target_: torch.optim.AdamW
+  lr: 1e-4
+  weight_decay: 1e-4
+
+scheduler:
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
+  _partial_: true
+  min_lr: 1e-6
+  max_steps: ${trainer.max_steps}
+
+# Set whether to compile the model
+compile: true
+
+# Adjust based on the available hardware
+accelerator: ${trainer.accelerator}
+
+visualize:
+  vis_test:
+    out_type: "none"
+    rollout_dir: "${paths.log_dir}/${task_name}/runs/WANDB_ID/rlt/test" #interpolation of the ID is done in the main script
+  vis_val:
+    out_type: "none"
+    rollout_dir: null

@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
@@ -5,6 +6,7 @@ import lightning as L
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
+from dotenv import load_dotenv
 from src.utils import (
     RankedLogger,
     extras,
@@ -17,7 +19,11 @@ from src.utils import (
 
 from src.utils.eval_utils import update_wandb_id
 
+load_dotenv(override=False)
+
 log = RankedLogger(__name__, rank_zero_only=True)
+
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 
 @task_wrapper

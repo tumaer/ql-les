@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /experiment/hit10/base
+  - override /model: v2u_gnn
+
+vars:
+  num_rollout_steps: 1
+
+model:
+  optimizer:
+    lr: 3e-4
+
+logger:
+  wandb:
+    project: "v2u_gnn"
+
+tags: ["hit10", "v2u_gnn"]

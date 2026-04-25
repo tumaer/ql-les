@@ -21,16 +21,14 @@ if [ "$#" -ne 3 ]; then
   exit 1
 fi
 
-# DOF:
-
 # Read command-line arguments
 EVERY_N="$1"  # can be specified as "1" or "10"
 SEED="$2"  # for reproducibility
 EXTRAS="$3"  # for additional arguments
 
-echo "Training v2u-GNSF on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
+echo "Training v2u-GNS on every_n=${EVERY_N} with seed=${SEED} and extras='${EXTRAS}'"
 # shellcheck disable=SC2086
-python src/train.py experiment=lag_kolm2d_every"${EVERY_N}".yaml \
+python src/train.py experiment=kolm_every_"${EVERY_N}"/lag.yaml \
   seed="${SEED}" +logger.wandb.name=lag ${EXTRAS}
 ### Runs
 
@@ -45,7 +43,20 @@ python src/train.py experiment=lag_kolm2d_every"${EVERY_N}".yaml \
 # sbatch scripts/slurm_lag.sh 1 12345 "model.net.noise_std=0.0"
 
 # Summary:
-# lr=1e-4 is a good choice, but we start with 1e-3 and reduce every 100k steps
+# lr=1e-4 is a good choice. lr=3e-4 has lower validation loss but training loss oszillates.
+#     Also, increase scheduler step_size from 100k to 200k.
 # noise is not needed and even degrades performance -> understandable with num_epochs=2.5
 
-### Runs 06.05.25 -> add more v2u_solvers
+### Runs 07.05.25 -> add more v2u_solvers;
+# sbatch scripts/slurm_lag.sh 1 12345 ""
+# sbatch scripts/slurm_lag.sh 1 12345 "model.v2u_solver=smooth"
+
+#################### hyperparameter tuning every1 ####################
+### Runs 15.05.25
+# sbatch scripts/slurm_lag.sh 10 12345 "model.optimizer.lr=0.0003"
+# sbatch scripts/slurm_lag.sh 10 12345 ""
+# sbatch scripts/slurm_lag.sh 10 12345 "model.optimizer.lr=0.00003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.0003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.00003"
+# sbatch scripts/slurm_lag.sh 10 12345 "model.net.noise_std=0.000003"

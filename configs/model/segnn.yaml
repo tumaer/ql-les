@@ -14,10 +14,11 @@ net:
   noise_std: 3.0e-4
   num_particle_types: 9
   particle_type_embedding_size: 16
-  dataset_path: ${data.data_dir} # Path to the dataset
+  metadata_path: ${data.data_dir}/metadata.json
   alpha_u: ${model.alpha_u}
   vel_solver: ${model.vel_solver}
   isotropic_norm: false
+  node_features_type: ["v"] # ["v", "u", "type"]
   # kwargs
   lmax_attr: 1
   lmax_hidden: 1

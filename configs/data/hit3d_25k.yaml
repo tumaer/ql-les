@@ -1,0 +1,14 @@
+#No pushforward
+_target_: src.data.sph_datamodule.SPHDataModule
+data_dir: ${paths.data_dir}/3D_HIT_32768_25kevery1
+batch_size: 1
+num_workers: 4
+input_seq_length: ${vars.input_seq_length}
+max_rollout_steps: ${vars.num_rollout_steps}
+is_preload: True
+is_augment: True
+
+# dataset_kwargs
+name: hit1
+every_n: 1
+metadata_file: metadata_every1.json

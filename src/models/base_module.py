@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any, Dict, Tuple
 from functools import partial
 import time
@@ -13,7 +12,8 @@ from torch import Tensor
 from src.models.components.sph import relax_wrapper
 from src.utils.data_utils import load_metadata
 from src.utils.interpolate import GridInterpolator
-from src.utils.nbrs_utils import shift_fn, displ_fn
+from src.utils.nbrs_utils import shift_fn, displ_fn, nearest
+from src.models.components.gns import time_diff
 
 
 class BaseSimulator(nn.Module):
@@ -25,7 +25,7 @@ class BaseSimulator(nn.Module):
         device,
         isotropic_norm,
         noise_std,
-        dataset_path,
+        metadata_path,
     ):
         super().__init__()
         self.model_name = model_name
@@ -33,7 +33,7 @@ class BaseSimulator(nn.Module):
         self.isotropic_norm = isotropic_norm
         self.noise_std = noise_std
 
-        self.metadata = load_metadata(Path(dataset_path))
+        self.metadata = load_metadata(metadata_path)
         self._boundaries = self.metadata["bounds"]
         self._connectivity_radius = self.metadata["default_connectivity_radius"]
         self._case = self.metadata["case"]
@@ -124,29 +124,59 @@ class BaseSimulator(nn.Module):
         """Convert displacement of positions `v` to velocity `u = (x1 - x0) / dt`."""
         return v / self._effective_dt
 
-    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps):
+    @staticmethod
+    def _infer_nx_from_particle_count(n_particles: int, dim: int) -> int:
+        """Infer grid resolution Nx from particle count, robust to float root precision."""
+        nx = round(n_particles ** (1.0 / dim))
+        while nx**dim < n_particles:
+            nx += 1
+        while (nx - 1) ** dim >= n_particles:
+            nx -= 1
+        return nx
+
+    def _sph_rlx(self, r, n_part_per_traj, is_tvf, dt_factor, num_steps, cfg=None):
         """Relax a point cloud in the exact same way as during dataset generation."""
 
         # Relax a point cloud using SPH without viscosity, but with transport vel.
+        nx = self._infer_nx_from_particle_count(r.shape[0], self.metadata["dim"])
         if not hasattr(self, "_relax_fn"):
             self._relax_fn = relax_wrapper(
-                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                Nx=nx,
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
                 u_ref=self.metadata["u_ref"],
-                is_tvf=is_tvf,  # our relaxations always use tvf
+                is_tvf=is_tvf,
                 nu=0.0,  # relaxations assume zero velocity, so this term drops
                 box=self._boundaries,
             )
+        rlx_fn = self._relax_fn
 
-        dt_factor = dt_factor
+        if cfg is not None:
+            # create second _relax_fn with tvf as specified in cfg
+            # typically _relax_fn has no TVF while _relax_fn_2 has TVF
+            assert "is_tvf" in cfg, "cfg must contain 'is_tvf' key"
+            if not hasattr(self, "_relax_fn_2"):
+                self._relax_fn_2 = relax_wrapper(
+                    Nx=nx,
+                    dim=self.metadata["dim"],
+                    L=self._boundaries[0].item(),
+                    is_physical=True,
+                    u_ref=self.metadata["u_ref"],
+                    is_tvf=cfg["is_tvf"],
+                    nu=0.0,  # relaxations assume zero velocity, so this term drops
+                    box=self._boundaries,
+                    tvf_factor=cfg.get("tvf_factor", 1.0),
+                )
+            if cfg["active"]:
+                rlx_fn = self._relax_fn_2
+            if cfg.get("only_cfg", False) and (not cfg["active"]):
+                dt_factor = 0.0
+
         v = 0.0
         # r_input = r.detach().clone()
         for i in range(num_steps):
-            a_temp = self._relax_fn(
-                r, n_part_per_traj
-            )  # , verbose=True if (i==num_steps-1) else False)
+            a_temp = rlx_fn(r, n_part_per_traj)  # , verbose=True if (i==num_steps-1) else False)
             dr = (dt_factor * self.metadata["dt"]) ** 2 * a_temp
             r = shift_fn(r, dr)
             v += dr
@@ -160,7 +190,7 @@ class BaseSimulator(nn.Module):
 
         if not hasattr(self, "_sph_fn"):
             self._sph_fn = relax_wrapper(
-                Nx=int(round(r.shape[0]) ** (1 / self.metadata["dim"])),
+                Nx=self._infer_nx_from_particle_count(r.shape[0], self.metadata["dim"]),
                 dim=self.metadata["dim"],
                 L=self._boundaries[0].item(),
                 is_physical=True,
@@ -171,6 +201,146 @@ class BaseSimulator(nn.Module):
             )
         # pressure term std: 53; viscous term std: 0.059; tvf std: 90
         return self._sph_fn(r, n_part_per_traj, u)
+
+    def _build_graph_from_raw(
+        self,
+        position_sequence,
+        n_particles_per_trajectory,
+        particle_types=None,
+        pbc=True,
+        node_features_type=None,
+        connectivity_on_nth_to_last=-1,  # no reason to touch this in normal use
+        **kwargs,
+    ):
+        """
+        Build a graph from raw data, including node and edge features.
+
+        Args:
+            position_sequence (Tensor): Sequence of positions.
+            n_particles_per_trajectory (Tensor): Number of particles per trajectory.
+            particle_types (Tensor): Particle types.
+            pbc (bool): Periodic boundary conditions. Defaults to True.
+            node_features_type (list): List of node feature types to include. Defaults to None.
+                In purely lagrangian setup it it ["v"], in quasi-lagrangian ["v", "u"].
+            connectivity_on_nth_to_last (int): Time frame used for connectivity. Typically last
+                frame, i.e., -1. To reuse this for v2u model, we allow for -2.
+
+        Returns:
+            Tuple[Dict[str, Tensor], Tensor, Dict[str, Tensor]]: Node features, edge index, and edge features.
+        """
+        device = position_sequence.device
+        n_total_points = position_sequence.shape[0]
+        most_recent_position = position_sequence[:, -1]  # (N, D)
+
+        batch_ids = torch.cat(
+            [
+                torch.LongTensor([i for _ in range(n)])
+                for i, n in enumerate(n_particles_per_trajectory)
+            ]
+        ).to(device)
+        node_features = {"batch_ids": batch_ids}
+
+        if node_features_type is None:
+            node_features_type = self.node_features_type
+
+        if "v" in node_features_type or "v1" in node_features_type or "dv" in node_features_type:
+            v_velocity_sequence = time_diff(position_sequence, self._boundaries, pbc)
+            # Normalized velocity sequence, merging spatial an time axis.
+            v_normalized_velocity_sequence = self._norm(v_velocity_sequence, "vv")
+            v_flat_velocity_sequence = v_normalized_velocity_sequence.view(n_total_points, -1)
+            if "v1" in node_features_type:
+                v_flat_velocity_sequence = torch.zeros_like(v_flat_velocity_sequence)
+            node_features["v_flat_velocity_sequence"] = v_flat_velocity_sequence
+
+        if "u" in node_features_type:
+            u_velocity_sequence = kwargs["u_velocity"]  # (N, T_in=6, D)
+            u_normalized_velocity_sequence = self._norm(u_velocity_sequence, "uu")
+            u_flat_velocity_sequence = u_normalized_velocity_sequence.view(n_total_points, -1)
+            node_features["u_flat_velocity_sequence"] = u_flat_velocity_sequence
+
+        # Normalized clipped distances to lower and upper boundaries, if not PBC.
+        if not pbc:
+            # Normalized clipped distances to lower and upper boundaries.
+            # boundaries are an array of shape [num_dimensions, 2], where the second
+            # axis, provides the lower/upper bofundaries.
+            boundaries = self._boundaries.clone().detach().float().requires_grad_(False).to(device)
+            distance_to_lower_boundary = most_recent_position - boundaries[:, 0][None]
+            distance_to_upper_boundary = boundaries[:, 1][None] - most_recent_position
+            distance_to_boundaries = torch.cat(
+                [distance_to_lower_boundary, distance_to_upper_boundary], dim=1
+            )
+            normalized_clipped_distance_to_boundaries = torch.clamp(
+                distance_to_boundaries / self._connectivity_radius, -1.0, 1.0
+            )
+            node_features["normalized_clipped_distance_to_boundaries"] = (
+                normalized_clipped_distance_to_boundaries
+            )
+
+        if self._num_particle_types > 1:
+            particle_type_embeddings = self._particle_type_embedding(particle_types)
+            node_features["particle_type_embeddings"] = particle_type_embeddings
+
+        # Edge Construction
+        interp = kwargs.get("interpolate_params", {"condition": "radius"})
+        if interp["condition"] == "radius":  # default
+            # senders and receivers are integer vectors of shape (E,)
+            receivers, senders = nearest(
+                position_sequence[:, connectivity_on_nth_to_last],
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                cutoff=self._connectivity_radius,
+            )
+        elif interp["condition"] == "knn":
+            receivers, senders = nearest(
+                position_sequence[:, connectivity_on_nth_to_last],
+                n_particles_per_trajectory,
+                pbc,
+                self._boundaries,
+                k=interp["k"],
+                condition="knn",
+            )
+        else:
+            raise ValueError("Invalid neighbor condition")
+
+        # Collect edge features.
+        edge_features = {}
+
+        # Relative displacement and distances normalized to radius
+        r_ij = self.displ_fn(most_recent_position[senders, :], most_recent_position[receivers, :])
+        r_ij /= self._connectivity_radius
+        edge_features["normalized_relative_displacements"] = r_ij
+        edge_features["normalized_relative_distances"] = torch.norm(r_ij, dim=1, keepdim=True)
+
+        if "dv" in node_features_type:
+            most_recent_v_velocity = time_diff(position_sequence, self._boundaries, pbc)[:, -1]
+            dv_ij = self._norm(
+                most_recent_v_velocity[senders] - most_recent_v_velocity[receivers],
+                key="vv",
+            )
+            edge_features["normalized_relative_velocities"] = dv_ij
+            edge_features["normalized_relative_velocity_distances"] = torch.norm(
+                dv_ij, dim=1, keepdim=True
+            )
+
+        if self.model_name == "lles":
+            EPS = 1e-6
+            most_recent_u_velocity = u_velocity_sequence[:, -1]
+            v_ij = self._norm(
+                most_recent_u_velocity[senders] - most_recent_u_velocity[receivers], key="uu"
+            )
+            r_sq = torch.sum(r_ij**2, dim=1, keepdim=True)
+            v_sq = torch.sum(v_ij**2, dim=1, keepdim=True)
+            dot_rv = torch.sum(r_ij * v_ij, dim=1, keepdim=True)
+
+            edge_features = torch.cat([torch.sqrt(r_sq), torch.sqrt(v_sq), dot_rv], dim=1)
+            edge_directions = torch.cat(
+                [r_ij / torch.sqrt(r_sq + EPS), v_ij / torch.sqrt(v_sq + EPS)], dim=1
+            )
+            return senders, receivers, edge_features, edge_directions
+
+        edge_index = torch.stack([senders, receivers], dim=0)  # flipped compared to PyG
+        return node_features, edge_index, edge_features
 
     def forward(self):
         """Forward pass of the model."""
@@ -201,6 +371,8 @@ class BaseLitModule(LightningModule):
         self.save_hyperparameters(logger=False, ignore=["net"])
         self.net = net(device="cuda" if accelerator == "gpu" else "cpu")
         self.neuralsph = neuralsph
+        if (neuralsph is not None) and ("cfg_every" in neuralsph):
+            self.net._cfg_every = neuralsph["cfg_every"]
 
         self.num_rollout_steps = num_rollout_steps
         self.active_metrics = active_metrics
@@ -209,29 +381,23 @@ class BaseLitModule(LightningModule):
         self.trajectory_idx = 0
 
         # Determine dx: either from metadata or computed from grid resolution
-        if "grid_res" in metric_space.interpolate:
+        if (metric_space is not None) and ("grid_res" in metric_space.interpolate):
             grid_res = metric_space.interpolate["grid_res"]
             dx = self.net._boundaries[0][1] / grid_res
         else:
             dx = self.net.metadata["dx"]
 
-        # Determine dx: either from metadata or computed from grid resolution
-        if "grid_res" in metric_space.interpolate:
-            grid_res = metric_space.interpolate["grid_res"]
-            dx = self.net._boundaries[0][1] / grid_res
-        else:
-            dx = self.net.metadata["dx"]
-
-        self.metrics_interpolate = GridInterpolator(
-            is_periodic=any(self.net._pbc),
-            domain_size=[x[1] for x in self.net._boundaries],
-            dim=self.net.dim,
-            dx=dx,
-            condition=metric_space.interpolate["condition"],
-            k=metric_space.interpolate["k"],
-            cutoff_factor=metric_space.interpolate["cutoff_factor"],
-            kernel=metric_space.interpolate["kernel"],
-        )
+        if metric_space is not None:
+            self.metrics_interpolate = GridInterpolator(
+                is_periodic=any(self.net._pbc),
+                domain_size=[x[1] for x in self.net._boundaries],
+                dim=self.net.dim,
+                dx=dx,
+                condition=metric_space.interpolate["condition"],
+                k=metric_space.interpolate["k"],
+                cutoff_factor=metric_space.interpolate["cutoff_factor"],
+                kernel=metric_space.interpolate["kernel"],
+            )
 
     def model_step(self):
         """Batch in, loss out."""

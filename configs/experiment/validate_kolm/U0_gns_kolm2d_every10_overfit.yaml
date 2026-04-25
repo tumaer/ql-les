@@ -16,6 +16,7 @@ model:
     num_message_passing_steps: 10
     particle_type_embedding_size: 16
     noise_std: 1.0e-4
+    node_features_type: ["v", "u"]
   pushforward: null
   vel_solver: "simple" # "simple", "tvf", "neural_sph"
   alpha_u: 0.0

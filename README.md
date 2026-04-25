@@ -32,6 +32,8 @@ source venv/bin/activate
 pip install -r requirements.txt
 # install this codebase
 pip install -e .
+
+pip install -e neuraloperator/
 ```
 
 #### Dev

@@ -1,6 +1,8 @@
 """Utility functions for evaluation."""
 
 import os
+import time
+
 import pickle
 import numpy as np
 import torch
@@ -49,7 +51,9 @@ def eval_rollout(
     boundaries = torch.tensor(metadata["bounds"], device=device)
     boundaries = boundaries[:, 1] - boundaries[:, 0]
 
+    batch.target_pos = batch.target_pos.cpu()
     simulator.eval()
+
     with torch.no_grad():
         features = {
             "enc_pos": batch.enc_pos,
@@ -59,6 +63,7 @@ def eval_rollout(
             "bounds": boundaries,
         }
         if u_vel:
+            batch.target_u = batch.target_u.cpu()
             features["u_velocity"] = batch.enc_u
             features["next_u_velocity"] = batch.target_u
 
@@ -86,6 +91,7 @@ def eval_rollout(
             }
 
         if vis_config.get("rollout_dir", None) is not None:
+            batch = batch.to("cpu")
             write_rollout(
                 batch=batch,
                 trajectory_idx=trajectory_idx,
@@ -132,7 +138,10 @@ def eval_single_rollout(
     position_predictions = []
     device = current_positions.device
 
+    is_timing = os.environ.get("TIME_ROLLOUT", "0") == "1"
     if u_vel is False:
+        if is_timing:
+            t0 = time.time()
         for step in range(num_rollout_steps):
             next_position = simulator.predict_positions(
                 current_positions=current_positions,
@@ -141,13 +150,17 @@ def eval_single_rollout(
                 pbc=pbc,
             )
             kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
-            next_position_ground_truth = ground_truth_positions[:, step]
+            next_position_ground_truth = ground_truth_positions[:, step].to(device)
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
-            position_predictions.append(next_position)
+            position_predictions.append(next_position.detach().cpu())
             current_positions = torch.cat(
                 [current_positions[:, 1:], next_position[:, None, :]], dim=1
             )
+        if is_timing:
+            if current_positions.is_cuda:
+                torch.cuda.synchronize(device=current_positions.device)
+            print(f"Traj (w/o u) simulated in {time.time() - t0:.2f} seconds.")
 
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
@@ -159,19 +172,23 @@ def eval_single_rollout(
             ground_truth_positions,
             metadata,
             active_metrics,
-            features["bounds"],
+            features["bounds"].detach().cpu(),
             pbc=pbc,
             metric_space=metric_space,
-            most_recent_position=features["enc_pos"][:, -1],
+            most_recent_position=features["enc_pos"][:, -1].detach().cpu(),
         )
 
         return computed_metrics, trajectory_rollout, ground_truth_positions
     else:
         current_u_velocity = features["u_velocity"]  # initial u_velocity
-        ground_truth_u_velocity = features["next_u_velocity"]
         u_vel_predictions = []
         x_grid = None
+        if is_timing:
+            t0 = time.time()
         for step in range(num_rollout_steps):
+            if hasattr(simulator, "_cfg_every"):
+                simulator.neuralsph.cfg["active"] = ((step + 1) % simulator._cfg_every) == 0
+
             out = simulator.predict_positions(
                 current_positions=current_positions,
                 n_particles_per_trajectory=features["n_particles_per_trajectory"],
@@ -189,11 +206,11 @@ def eval_single_rollout(
             else:
                 raise ValueError("Invalid output from simulator.")
             kinematic_mask = (features["particle_types"] == 3).bool()[:, None].expand(-1, dim)
-            next_position_ground_truth = ground_truth_positions[:, step]
+            next_position_ground_truth = ground_truth_positions[:, step].to(device)
             next_position = torch.where(kinematic_mask, next_position_ground_truth, next_position)
 
-            position_predictions.append(next_position)
-            u_vel_predictions.append(new_u_velocity)
+            position_predictions.append(next_position.detach().cpu())
+            u_vel_predictions.append(new_u_velocity.detach().cpu())
 
             current_positions = torch.cat(
                 [current_positions[:, 1:], next_position[:, None, :]], dim=1
@@ -202,31 +219,44 @@ def eval_single_rollout(
                 [current_u_velocity[:, 1:], new_u_velocity[:, None, :]], dim=1
             )
 
+        if is_timing:
+            if current_positions.is_cuda:
+                torch.cuda.synchronize(device=current_positions.device)
+            print(f"Traj (w/ u) simulated in {time.time() - t0:.2f} seconds.")
+
         position_predictions = torch.stack(position_predictions)  # (time, n_nodes, dim)
         u_vel_predictions = torch.stack(u_vel_predictions)  # (time, n_nodes, dim)
         ground_truth_positions = ground_truth_positions.permute(1, 0, 2)
-        ground_truth_u_velocity = ground_truth_u_velocity.permute(1, 0, 2)
-
-        trajectory_rollout = position_predictions
-        u_vel_rollout = u_vel_predictions
+        ground_truth_u_velocity = features["next_u_velocity"].permute(1, 0, 2)
 
         # interpolate both u values to the same grid
+        if num_rollout_steps > 4001:
+            slice_n = 100  # 40...200 frames
+        elif num_rollout_steps > 1001:
+            slice_n = 25  # 40...200 frames
+        elif num_rollout_steps > 201:
+            slice_n = 5  # 40...200 frames
+        else:
+            slice_n = 1  # up to 200 frames
         assert interpolate is not None, "Interpolator needed if u_vel=True."
-        npptr = torch.tensor(
-            [next_position.shape[0]] * num_rollout_steps, dtype=torch.int64, device=device
-        )
-        u_pred = interpolate(
-            r=position_predictions.reshape(-1, dim),
-            f=u_vel_predictions.reshape(-1, dim),
-            npptr=npptr,
-        ).reshape(num_rollout_steps, -1, dim)
-        u_gt = interpolate(
-            r=ground_truth_positions.reshape(-1, dim),
-            f=ground_truth_u_velocity.reshape(-1, dim),
-            npptr=npptr,
-        ).reshape(num_rollout_steps, -1, dim)
-
-        du = u_pred - u_gt  # physical space
+        n_frames = len(position_predictions[::slice_n])
+        npptr = torch.tensor([len(next_position)] * n_frames, dtype=torch.int64, device=device)
+        try:
+            u_pred = interpolate(
+                r=position_predictions[::slice_n].reshape(-1, dim).to(device),
+                f=u_vel_predictions[::slice_n].reshape(-1, dim).to(device),
+                npptr=npptr,
+            ).reshape(n_frames, -1, dim)
+            u_gt = interpolate(
+                r=ground_truth_positions[::slice_n].reshape(-1, dim).to(device),
+                f=ground_truth_u_velocity[::slice_n].reshape(-1, dim).to(device),
+                npptr=npptr,
+            ).reshape(n_frames, -1, dim)
+            du = u_pred - u_gt  # in physical space
+            del u_pred, u_gt
+        except Exception as e:
+            print(f"Interpolation failed: {e}")
+            du = torch.zeros_like(u_vel_predictions[::slice_n].to(device))
 
         if metric_space == "norm":
             du /= torch.tensor(metadata["u_std"], device=device)
@@ -238,14 +268,14 @@ def eval_single_rollout(
             ground_truth_positions,
             metadata,
             active_metrics,
-            features["bounds"],
+            features["bounds"].detach().cpu(),
             pbc=pbc,
-            u_vel=True,
             metric_space=metric_space,
-            most_recent_position=features["enc_pos"][:, -1],
+            most_recent_position=features["enc_pos"][:, -1].detach().cpu(),
         )
         # print(computed_position_metrics["mse"])
-        computed_vel_metrics = (du**2).mean(dim=(1, 2))
+        computed_vel_metrics = (du.detach().cpu() ** 2).mean(dim=(1, 2))
+        del du
         # print(computed_vel_metrics)
         # import matplotlib.pyplot as plt
         # fig = plt.figure()
@@ -258,9 +288,10 @@ def eval_single_rollout(
         # plt.grid()
         # plt.savefig("mse_v_u.png")
 
+        torch.cuda.empty_cache()
         return (
             (computed_position_metrics, computed_vel_metrics),
-            (trajectory_rollout, u_vel_rollout),
+            (position_predictions, u_vel_predictions),
             (ground_truth_positions, ground_truth_u_velocity),
         )
 

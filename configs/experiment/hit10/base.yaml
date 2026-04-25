@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /data: hit3d_25k
+  - override /trainer: gpu
+  - override /vars: hit3d
+  - override /callbacks: default
+  - override /logger: wandb
+
+data:
+  name: hit10
+  every_n: 10
+  metadata_file: metadata_every10.json
+
+model:
+  optimizer:
+    lr: 3e-4
+
+trainer:
+  max_steps: 100_000
+  log_every_n_steps: 500
+  val_check_interval: 5_000
+
+logger:
+  wandb:
+    project: "hit10"
+
+seed: 123

@@ -10,7 +10,7 @@ net:
   model_name: "gino" # gino, interp_fno
   isotropic_norm: false
   noise_std: 3.0e-4
-  dataset_path: ${data.data_dir}
+  metadata_path: ${data.data_dir}/${data.metadata_file}
   return_x_grid: false
   ### GINO kwargs
   in_gno_transform_type: linear
@@ -35,24 +35,15 @@ net:
 optimizer:
   _partial_: true
   _target_: torch.optim.AdamW # SGD with lr=0.03 does pretty well on overfitting
-  lr: 1.0e-4
+  lr: 1.0e-3
   weight_decay: 1.e-4
 
-# # Scheduler configuration
-# scheduler:
-#   _partial_: true
-#   _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
-#   optimizer: ${..optimizer} # Reference optimizer from the model configuration
-#   min_lr: 0.0001
-#   steps_per_epoch: 1
-#   warmup_epochs: 0
-#   max_epochs: 10
-
+#Scheduler configuration
 scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
+  _target_: src.utils.schedulers.LinearWarmupCosineAnnealingLR
   _partial_: true
-  step_size: 100_000
-  gamma: 0.5
+  min_lr: 1e-6
+  max_steps: ${trainer.max_steps}
 
 # Set whether to compile the model
 compile: true

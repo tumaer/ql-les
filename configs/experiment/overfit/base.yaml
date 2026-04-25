@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - override /data: kolm2d_every1_debug
+  - override /trainer: gpu
+  - override /vars: kolm2d
+  - override /callbacks: default
+  - override /logger: wandb
+  - override /debug: default

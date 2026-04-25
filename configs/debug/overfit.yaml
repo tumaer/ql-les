@@ -18,14 +18,16 @@ trainer:
   limit_train_batches: ${vars.num_rollout_steps}
   limit_val_batches: 1
   limit_test_batches: 1
-  val_check_interval: 10
+  val_check_interval: 100
   max_epochs: -1
-  max_steps: 200 # Train iters
+  max_steps: 1000 # Train iters
 
 data:
   shuffle: True
   limit_train_batches: ${vars.num_rollout_steps}
   overfit: True
+  is_preload: False
+  is_augment: False
 
 vars:
   num_rollout_steps: 1 # STEPS

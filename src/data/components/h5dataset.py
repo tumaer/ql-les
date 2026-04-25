@@ -40,6 +40,57 @@ class NodeType(enum.IntEnum):
     SIZE = 9
 
 
+def h5_to_dict(obj):
+    if isinstance(obj, h5py.Dataset):
+        # load dataset into RAM
+        return obj[()]  # same as np.array(obj)
+
+    elif isinstance(obj, h5py.Group):
+        return {key: h5_to_dict(obj[key]) for key in obj.keys()}
+
+    else:
+        raise TypeError(f"Unsupported HDF5 object: {type(obj)}")
+
+
+def augment_fn(data_dict, L=2 * torch.pi):
+    """
+    Efficient data augmentation in a [0,L]^D box: shift, discrete rotate, and flip.
+    Works natively for D=2 and D=3.
+    """
+    X = data_dict["position"]
+    D = X.shape[-1]
+    device = X.device
+    dtype = X.dtype
+
+    # 1. Random Continuous Shift
+    # (Applied before rotation, which is perfectly valid in a periodic domain)
+    shift = torch.rand((D,), device=device, dtype=dtype) * L
+    X = (X + shift) % L
+
+    # 2. Sample the Hyperoctahedral group (Rotations + Reflections)
+    # Generate a random permutation of axes (e.g., [1, 0, 2] for 3D)
+    perm = torch.randperm(D, device=device)
+
+    # Generate random sign flips for each axis (-1 or 1)
+    signs = (torch.randint(0, 2, (D,), device=device, dtype=dtype) * 2 - 1).to(dtype)
+
+    # 3. Apply Transformations to Positions
+    center = L / 2.0
+    # Center the box, apply permutation and signs, then un-center
+    X_centered = X - center
+    X = (X_centered[..., perm] * signs + center) % L
+
+    # Update dictionary with a new tensor (avoids in-place mutation)
+    data_dict["position"] = X
+
+    # 4. Apply the exact same linear transformation to Velocities
+    if "u" in data_dict:
+        u = data_dict["u"]
+        data_dict["u"] = u[..., perm] * signs
+
+    return data_dict
+
+
 class H5Dataset(Dataset):
     """Dataset for loading HDF5 simulation trajectories.
 
@@ -57,8 +108,12 @@ class H5Dataset(Dataset):
         name: Optional[str] = None,
         input_seq_length: int = 6,
         extra_seq_length: int = 0,
-        nl_backend: str = "matscipy",
         regime: str = "train",
+        only_beginning: bool = False,
+        every_n: int = 1,
+        metadata_file: str = "metadata.json",
+        is_preload: bool = False,
+        is_augment: bool = False,
     ):
         """Initialize the dataset. If the dataset is not present, it is downloaded.
 
@@ -74,9 +129,14 @@ class H5Dataset(Dataset):
             extra_seq_length: During training, this is the maximum number of pushforward
                 unroll steps. During validation/testing, this specifies the largest
                 N-step MSE loss we are interested in, e.g. for best model checkpointing.
-            nl_backend: Which backend to use for the neighbor list
             regime: [train|inference] - used to determine the dataset slicing
+            only_beginning: If True, there will be only one sample per trajectory.
+            every_n: slice every_n-th frame as consecutive frames for training. Assumes that the
+                dataset is storing every 1 frame.
         """
+
+        if only_beginning:
+            assert regime == "inference", "This argument is currently not supported for training."
 
         dataset_path = osp.normpath(dataset_path)  # remove potential trailing slash
 
@@ -94,8 +154,12 @@ class H5Dataset(Dataset):
         self.dataset_path = dataset_path
         self.file_path = osp.join(dataset_path, split + ".h5")
         self.input_seq_length = input_seq_length
-        self.nl_backend = nl_backend
         self.split = split
+        self.every_n = every_n
+        self.regime = regime
+        self.is_preload = is_preload
+        self.is_augment = is_augment
+        print(f"Running {split=} with {is_preload=}, {is_augment=}.")
 
         force_fn_path = osp.join(dataset_path, "force.py")
         if osp.exists(force_fn_path):
@@ -114,10 +178,11 @@ class H5Dataset(Dataset):
             self.external_force_fn = None
 
         # load dataset metadata
-        with open(osp.join(dataset_path, "metadata.json"), "r") as f:
+        with open(osp.join(dataset_path, metadata_file), "r") as f:
             self.metadata = json.loads(f.read())
 
-        self.db_hdf5 = None
+        # open the database file
+        self.db_hdf5 = self._open_hdf5()
 
         with h5py.File(self.file_path, "r") as f:
             self.traj_keys = list(f.keys())
@@ -133,9 +198,8 @@ class H5Dataset(Dataset):
             # trajectory becomes:
 
             self.subseq_length = input_seq_length + 1 + extra_seq_length
-            samples_per_traj = (
-                self.sequence_length - self.subseq_length + 1
-            )  # number of trajectory samples for a given trajectory
+            # number of training samples per dataset trajectory
+            samples_per_traj = self.sequence_length - (self.subseq_length - 1) * every_n
 
             keylens = np.array([samples_per_traj for _ in range(len(self.traj_keys))])  #
             self._keylen_cumulative = np.cumsum(keylens).tolist()
@@ -148,9 +212,11 @@ class H5Dataset(Dataset):
             # Compute the number of splits per validation trajectory. If the length of
             # each trajectory is 1000, we want to compute a 20-step MSE, and
             # intput_seq_length=6, then we should split the trajectory into
-            # _split_valid_traj_into_n = 1000 // (20 + 6) chunks.
+            # _split_valid_traj_into_n = 1000 // ((20 + 6) * every_n) chunks.
             self.subseq_length = input_seq_length + extra_seq_length
-            self._split_valid_traj_into_n = self.sequence_length // self.subseq_length
+            self._split_valid_traj_into_n = self.sequence_length // (self.subseq_length * every_n)
+            if only_beginning:
+                self._split_valid_traj_into_n = 1
 
             self.num_samples = self._split_valid_traj_into_n * len(self.traj_keys)
             self.getter = self.get_trajectory
@@ -190,31 +256,35 @@ class H5Dataset(Dataset):
 
     def _open_hdf5(self) -> h5py.File:
         """Open the HDF5 file. Done only once per training/validation/test run."""
-        if self.db_hdf5 is None:
-            return h5py.File(self.file_path, "r")
-        else:
+        if self.regime == "train" and self.is_preload:
+            # The whole dataset is actually small and fits into RAM.
+            with h5py.File(self.file_path, "r") as f:
+                self.db_hdf5 = h5_to_dict(f)
             return self.db_hdf5
+        else:
+            return h5py.File(self.file_path, "r")
 
     def get_trajectory(self, idx: int):
         """Get a (full) trajectory and index idx."""
-        # open the database file
-        self.db_hdf5 = self._open_hdf5()
 
         if self._split_valid_traj_into_n > 1:
             traj_idx = idx // self._split_valid_traj_into_n
-            slice_from = (idx % self._split_valid_traj_into_n) * self.subseq_length
-            slice_to = slice_from + self.subseq_length
+            slice_from = (idx % self._split_valid_traj_into_n) * self.subseq_length * self.every_n
+            slice_to = slice_from + self.subseq_length * self.every_n
         else:
             traj_idx = idx
             slice_from = 0
-            slice_to = self.subseq_length
+            slice_to = self.subseq_length * self.every_n
 
         # get a pointer to the trajectory. That is not yet the real trajectory.
         traj = self.db_hdf5[f"{self.traj_keys[traj_idx]}"]
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load and transpose the trajectory
-        pos_input = torch.tensor(traj_pos[slice_from:slice_to].transpose((1, 0, 2)))
+        # Take every_n-th frame from the sliced window
+        pos_input = torch.tensor(
+            traj_pos[slice_from : slice_to : self.every_n].transpose((1, 0, 2))
+        )
 
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
 
@@ -223,8 +293,9 @@ class H5Dataset(Dataset):
         # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = torch.tensor(traj_u_vel[slice_from:slice_to].transpose((1, 0, 2)))
-            position_dict["u"] = u_input_and_target
+            position_dict["u"] = torch.tensor(
+                traj_u_vel[slice_from : slice_to : self.every_n].transpose((1, 0, 2))
+            )
 
         return position_dict
 
@@ -237,17 +308,15 @@ class H5Dataset(Dataset):
         if traj_idx != 0:
             el_idx = idx - self._keylen_cumulative[traj_idx - 1]
         assert el_idx >= 0
-
-        # open the database file
-        self.db_hdf5 = self._open_hdf5()
+        el_idx_to = el_idx + self.subseq_length * self.every_n
 
         # get a pointer to the trajectory. That is not yet the real trajectory.
         traj = self.db_hdf5[f"{self.traj_keys[traj_idx]}"]
         # get a pointer to the positions of the traj. Still nothing in memory.
         traj_pos = traj["position"]
         # load only a slice of the positions. Now, this is an array in memory.
-        pos_input_and_target = traj_pos[el_idx : el_idx + self.subseq_length]
-        pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))
+        pos_input_and_target = traj_pos[el_idx : el_idx_to : self.every_n]
+        pos_input_and_target = torch.tensor(pos_input_and_target.transpose((1, 0, 2)))  # (N, T, D)
 
         particle_types = torch.tensor(traj["particle_type"][:], dtype=torch.int32)
 
@@ -256,9 +325,8 @@ class H5Dataset(Dataset):
         # if ds contains physical velocity target
         if "u" in traj:
             traj_u_vel = traj["u"]
-            u_input_and_target = traj_u_vel[el_idx : el_idx + self.subseq_length]
-            u_input_and_target = torch.tensor(u_input_and_target.transpose((1, 0, 2)))
-            position_dict["u"] = u_input_and_target
+            u_input_and_target = traj_u_vel[el_idx : el_idx_to : self.every_n]
+            position_dict["u"] = torch.tensor(u_input_and_target.transpose((1, 0, 2)))  # (N, T, D)
 
         return position_dict
 
@@ -272,6 +340,9 @@ class H5Dataset(Dataset):
                 compute the target acceleration.
         """
         position_dict = self.getter(idx)
+
+        if self.regime == "train" and self.is_augment:
+            position_dict = augment_fn(position_dict)
 
         if "u" in position_dict:
             return Data(
@@ -322,3 +393,41 @@ def get_dataset_name_from_path(path: str) -> str:
         )
         name = dir
     return name
+
+
+if __name__ == "__main__":
+    """Example usage of the H5Dataset class."""
+
+    def print_ds(dataset: H5Dataset):
+        print("###### Dataset Information ######")
+        print(f"Dataset name: {dataset.name}")
+        print(f"Number of samples: {len(dataset)}")
+        print(f"Number of trajectories: {len(dataset.traj_keys)}")
+        print(f"Trajectory length: {dataset.sequence_length}")
+        print(f"Subsequence length: {dataset.subseq_length}")
+        print("Sample data structure:")
+        sample = dataset[0]
+        for k, v in sample:
+            print(f"{k}: {v.shape if isinstance(v, torch.Tensor) else v}")
+        print("##################################")
+
+    dataset = H5Dataset(
+        split="train",
+        dataset_path="data/2D_TGV_2500_10kevery100",
+        input_seq_length=6,
+        extra_seq_length=0,
+        regime="train",
+    )
+    print_ds(dataset)
+
+    for only_beginning in [False, True]:
+        dataset = H5Dataset(
+            split="valid",
+            dataset_path="data/2D_TGV_2500_10kevery100",
+            input_seq_length=6,
+            extra_seq_length=20,
+            regime="inference",
+            only_beginning=only_beginning,
+        )
+        print(f"\nValidation dataset with only_beginning={only_beginning}:")
+        print_ds(dataset)

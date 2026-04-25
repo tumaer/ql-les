@@ -31,7 +31,11 @@ rootutils       # standardizing the project root setup
 pre-commit      # hooks for applying linters on commit
 rich            # beautiful text formatting in terminal
 pytest          # tests
+ninja           # required by torch.utils.cpp_extension.load for JIT CUDA builds
+python-dotenv
+pandas
 # sh            # for running bash commands in some tests (linux/macos only)
+finufft
 
 # --------- LagrangeBench --------- #
 h5py
