@@ -2,6 +2,8 @@ import argparse
 import json
 import struct
 
+import io
+import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -18,8 +20,6 @@ from src.utils.visualize import (
     ZeroNeighborsInterpolationError,
 )
 from matplotlib.colors import Normalize
-import matplotlib.animation as animation
-
 
 from matplotlib.colors import ListedColormap
 import matplotlib as mpl
@@ -38,13 +38,6 @@ def turbo_darkmid(strength=0.35, width=0.18, n=256):
 
     return ListedColormap(colors, name="turbo_darkmid")
 
-
-# # Tell the mathtext engine to use Computer Modern
-# plt.rcParams.update({
-#     "font.family": "serif",   # Use a serif font
-#     "font.serif": ["Computer Modern Roman"],  # Specifically Computer Modern
-#     "mathtext.fontset": "cm"  # Your existing math setting
-# })
 
 plt.rcParams.update(
     {
@@ -468,16 +461,12 @@ def plt_stats_lastframe_2panel(
 
     for ax in axs:
         ax.set_xticks(x)
-        # ax.set_xticklabels(names, rotation=30, ha="right")
         ax.set_xticklabels([n.split("std=")[-1] for n in names])
-        # ax.grid(axis="y", alpha=0.25)
         ax.set_xlabel("Noise Std")
-        # ax.set_yscale("log")
         ax.margins(x=0.0)
 
     ax_ekin_err.set_ylabel("Ekin MAE over trajectories")
-    # ax_ekin_err.set_title("Kinetic energy error")
-    # ax_ekin_err.set_ylim(b_ek["min"] * 0.5)
+
     if "hit1" in fig_dir:
         ax_ekin_err.set_ylim(0, 16)
         ax_ekin_err.legend(fontsize=11, frameon=False, loc="upper left")
@@ -487,14 +476,6 @@ def plt_stats_lastframe_2panel(
     ax_spec_err.set_ylim(0)
 
     ax_spec_err.set_ylabel("Spectrum MAE at time=" + ("14" if "kolm1" in fig_dir else "5"))
-    # Keep spectrum-error ticks in plain decimal notation and force visible labels.
-    # ax_spec_err.set_yscale("linear")
-    # spec_fmt = mpl.ticker.ScalarFormatter(useMathText=False)
-    # spec_fmt.set_scientific(False)
-    # ax_spec_err.yaxis.set_major_formatter(spec_fmt)
-    # ax_spec_err.yaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=4))
-    # ax_spec_err.yaxis.set_minor_locator(mpl.ticker.NullLocator())
-    # ax_spec_err.set_title("Spectrum error")
 
     fig.savefig(f"./logs/{fig_dir}/{fig_suffix}2panel_lastframe_marginalized.pdf", dpi=300)
     fig.savefig(f"./logs/{fig_dir}/{fig_suffix}2panel_lastframe_marginalized.png", dpi=300)
@@ -637,7 +618,6 @@ def plt_runtime_vs_ekin_mae(
     ax.set_ylabel("Runtime per simulation [s]")
     ax.set_yscale("log")
     ax.set_xlim(0)
-    # ax.grid(alpha=0.3)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
@@ -1279,41 +1259,85 @@ def plt_stats(
     plt.close()
 
 
-def animate_rlt(path, slice_n=1, suffix="", rlt_idx=0, fig_dir="figs_kolm1"):
-    """Animate particle evolution trajectory."""
-    # list all rollout files of format "rollout_00000.pkl"
+def animate_rlt(path, slice_n=10, suffix="", rlt_idx=0, fig_dir="figs_kolm1"):
+    """Animate side-by-side ground-truth and predicted particle trajectories."""
+
     rlts = os.listdir(path)
     rlts = [f for f in rlts if f.startswith("rollout_") and f.endswith(".pkl")]
-    rlts.sort()  # sort by name to ensure order
+    rlts.sort()
     rlt = rlts[rlt_idx]
 
     rollout = pickle.load(open(os.path.join(path, rlt), "rb"))
-    positions = rollout["predicted_rollout"][::slice_n]  # shape: (T, P, D)
-    colors = (rollout["predicted_u_vel"] ** 2).mean(-1)[::slice_n]  # shape: (T, P)
+    pred_positions = rollout["predicted_rollout"][::slice_n]
+    gt_positions = rollout["ground_truth_rollout"][::slice_n]
+    pred_colors = np.linalg.norm(rollout["predicted_u_vel"][::slice_n], axis=-1)
+    gt_colors = np.linalg.norm(rollout["ground_truth_u_vel"][::slice_n], axis=-1)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    norm = Normalize(vmin=0, vmax=10)
+    norm = Normalize(vmin=0, vmax=6)
 
-    def update(frame):
-        ax.clear()
-        scatter = ax.scatter(
-            positions[frame, :, 0],
-            positions[frame, :, 1],
-            c=colors[frame],
-            cmap="viridis",
-            norm=norm,
-            s=10,
-        )
-        ax.set_xlim(positions[:, :, 0].min(), positions[:, :, 0].max())
-        ax.set_ylim(positions[:, :, 1].min(), positions[:, :, 1].max())
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_title(f"Frame {frame}")
-        return (scatter,)
+    fig, axs = plt.subplots(1, 2, figsize=(5, 2.45), layout="constrained")
+    step_width = len(str((len(pred_positions) - 1) * slice_n))
+    step_text = fig.text(0.35, 0.975, "", ha="left", va="top", fontsize=10, family="monospace")
 
-    anim = animation.FuncAnimation(fig, update, frames=len(positions), interval=100, blit=False)
-    anim.save(f"./logs/{fig_dir}/anim_{suffix}_{rlt_idx}.gif", writer="pillow", fps=10)
+    scatter_gt = axs[0].scatter(
+        gt_positions[0, :, 0],
+        gt_positions[0, :, 1],
+        c=gt_colors[0],
+        cmap="viridis",
+        norm=norm,
+        s=3,
+    )
+    scatter_pred = axs[1].scatter(
+        pred_positions[0, :, 0],
+        pred_positions[0, :, 1],
+        c=pred_colors[0],
+        cmap="viridis",
+        norm=norm,
+        s=3,
+    )
+
+    axs[0].set_title("Ground truth")
+    axs[1].set_title("Prediction")
+    for ax in axs:
+        ax.set_xlim(0, 2 * np.pi)
+        ax.set_ylim(0, 2 * np.pi)
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    sm = plt.cm.ScalarMappable(norm=norm, cmap="viridis")
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axs, fraction=0.03, pad=0.02)
+    cbar.set_label(r"$|\mathbf{u}|$")
+
+    # Warm-up render: let constrained_layout settle before collecting
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=200)  # discarded
+
+    # Render all frames to memory
+    frames = []
+    for frame in range(len(pred_positions)):
+        scatter_gt.set_offsets(gt_positions[frame])
+        scatter_gt.set_array(gt_colors[frame])
+        scatter_pred.set_offsets(pred_positions[frame])
+        scatter_pred.set_array(pred_colors[frame])
+        step_text.set_text(f"(Step: {frame * slice_n:{step_width}d})")
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=200)
+        buf.seek(0)
+        frames.append(imageio.imread(buf))
+
     plt.close()
+
+    # Save with a single global palette across all frames
+    imageio.mimsave(
+        f"./logs/{fig_dir}/anim_{suffix[-15:]}_{rlt_idx}.gif",
+        frames,
+        fps=10,
+        quantizer="nq",
+        palettesize=256,
+    )
 
 
 def rlt_path(ckpt_date, rlt_type):
@@ -1420,7 +1444,7 @@ def get_paths(name):
         names = [x + ", wd=0", x + ", wd=1e-5", x + ", wd=1e-4", x + ", wd=1e-3"]
     elif name == "kolm10_1400_std_paper":
         paths = [
-            rlt_path("2026-03-28_14-36-44", "1399_c_2n3"),  # std000003
+            rlt_path("2026-04-02_00-13-54", "1399_2n3"),  # std000003
         ]
         x = names[0]
         names = [x]
@@ -1478,6 +1502,11 @@ if __name__ == "__main__":
         data_dir = "./data/3D_HIT_32768_25kevery1"
 
     paths, names, fig_suffix, slices, fig_dir, baseline_json = get_paths(args.name)
+    if args.animate:
+        for i, (slice_n, name) in enumerate(zip(slices, names)):
+            animate_rlt(paths[i], slice_n, name + "_" + fig_suffix, 4, fig_dir=fig_dir)
+        exit()
+
     plt_stats(paths, names, fig_suffix, data_dir, fig_dir)
     if "kolm1_14000" in args.name or "kolm10_1400" in args.name or "hit10_250" in args.name:
         plt_stats_lastframe_2panel(paths, names, fig_suffix, data_dir, fig_dir, baseline_json)
@@ -1493,7 +1522,3 @@ if __name__ == "__main__":
     else:
         plt_scatter_gt_and_runs_timeline_3d(paths, names, fig_suffix, rlt_idx=4, fig_dir=fig_dir)
         pass
-
-    if args.animate:
-        for i, (slice_n, name) in enumerate(zip(slices, names)):
-            animate_rlt(paths[i], slice_n, name + "_" + fig_suffix, 4, fig_dir=fig_dir)
